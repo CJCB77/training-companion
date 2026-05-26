@@ -13,7 +13,14 @@ class Settings(BaseSettings):
     database_url: str = ""
 
     supabase_url: str = ""
-    supabase_jwt_secret: str = ""
+
+    @property
+    def supabase_jwks_url(self) -> str:
+        return f"{self.supabase_url}/auth/v1/.well-known/jwks.json"
+
+    @property
+    def supabase_issuer(self) -> str:
+        return f"{self.supabase_url}/auth/v1"
 
     sentry_dsn: str = ""
 
