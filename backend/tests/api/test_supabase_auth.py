@@ -17,7 +17,11 @@ TEST_KID = "test-kid-1"
 
 
 def _b64url_uint(value: int, byte_length: int = 32) -> str:
-    return base64.urlsafe_b64encode(value.to_bytes(byte_length, "big")).rstrip(b"=").decode()
+    return (
+        base64.urlsafe_b64encode(value.to_bytes(byte_length, "big"))
+        .rstrip(b"=")
+        .decode()
+    )
 
 
 @pytest.fixture
@@ -121,7 +125,7 @@ def test_validate_token_rejects_unknown_kid(ec_keypair):
 def test_validate_token_rejects_tampered_payload(ec_keypair):
     pem, _ = ec_keypair
     token = _make_token(pem)
-    
+
     # Change the very first letter of the token payload section
     head, payload, signature = token.split(".")
     tampered_payload = ("X" if payload[0] != "X" else "Y") + payload[1:]
