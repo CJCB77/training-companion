@@ -87,6 +87,54 @@ docker compose down -v     # stop containers and wipe DB volume
 
 ---
 
+### Database Migrations (Alembic)
+
+Alembic manages schema changes. Adding a model class does **not** create a table — you must
+generate and run a migration for the change to reach the database.
+
+**How it fits together:**
+
+- `app/models/` — SQLModel classes that describe what tables *should* look like
+- `alembic/versions/` — migration files that record how to get the DB from state A to state B
+- `alembic/env.py` — wires Alembic to your `DATABASE_URL` and imports all models so it can diff them
+- Alembic connects to whichever DB your `DATABASE_URL` points to — local Docker container or Supabase
+
+**Workflow: adding a new model**
+
+1. Create the model file in `app/models/your_model.py`
+2. Import it in `app/models/__init__.py` (required — Alembic won't see it otherwise):
+   ```python
+   from app.models.your_model import YourModel  # noqa: F401
+   ```
+3. Generate the migration (Alembic diffs your models against the current DB schema):
+   ```bash
+   docker compose exec backend alembic revision --autogenerate -m "add your_model table"
+   ```
+4. Review the generated file in `alembic/versions/` — always check it before running
+5. Apply the migration:
+   ```bash
+   docker compose exec backend alembic upgrade head
+   ```
+
+**Other useful commands**
+
+```bash
+# Check which migration the DB is currently at
+docker compose exec backend alembic current
+
+# Show full migration history
+docker compose exec backend alembic history
+
+# Roll back the last migration (undo it)
+docker compose exec backend alembic downgrade -1
+```
+
+**Dev vs production:** steps 3–5 run against whichever database `DATABASE_URL` points to.
+Locally that's the Docker Postgres container. In production (Railway), set `DATABASE_URL`
+to your Supabase connection string and run `alembic upgrade head` as a deploy step.
+
+---
+
 ### Running Tests
 
 The `dev` Docker stage includes all test dependencies. The `production` stage does not.
