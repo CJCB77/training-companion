@@ -47,6 +47,14 @@ class Program(SQLModel, table=True):
         default=None, sa_column=sa.Column(JSONB, nullable=True)
     )
 
+    # Soft delete: NULL means active. Set on DELETE /programs/{id} instead of removing
+    # the row, so the full week -> session -> prescription tree (and training history
+    # built on top of it) survives.
+    deleted_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+
     created_at: datetime | None = created_at_column()
     updated_at: datetime | None = updated_at_column()
 
