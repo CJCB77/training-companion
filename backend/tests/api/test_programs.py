@@ -13,11 +13,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_current_user
+from app.core.database import get_session
 from app.main import app
 from app.services import programs as programs_service
 from tests.factories import make_profile, make_program
 
 PROGRAM_ID = 42
+
+
+def _fake_session():
+    # The service layer is mocked in every test here, so the session itself is
+    # never used to query anything — this just satisfies the route's Depends
+    # without needing a real DATABASE_URL/engine (empty in CI).
+    yield MagicMock()
 
 
 @pytest.fixture
@@ -30,10 +38,12 @@ def current_user():
 @pytest.fixture
 def authenticated_client(current_user):
     app.dependency_overrides[get_current_user] = lambda: current_user
+    app.dependency_overrides[get_session] = _fake_session
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_session, None)
 
 
 def _program_read_double(user_id: int) -> object:
