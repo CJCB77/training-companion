@@ -69,7 +69,48 @@ def get_active_program(session: Session, user_id: int) -> Program | None:
     ).first()
 
 
+def deactivate_other_active_programs(
+    session: Session, user_id: int, *, exclude_program_id: int | None = None
+) -> None:
+    """Turn off `is_active` on every other active program owned by this user.
+
+    Does not commit — the caller (creating or activating a program) adds this to the
+    same session and commits once, so the deactivation and the activation land in a
+    single transaction. Without this, get_active_program's unordered `.first()` would
+    have no way to pick a single "current" program once more than one is active.
+    """
+    statement = select(Program).where(
+        Program.user_id == user_id,
+        Program.is_active.is_(True),  # type: ignore[union-attr]
+        Program.deleted_at.is_(None),  # type: ignore[union-attr]
+    )
+    if exclude_program_id is not None:
+        statement = statement.where(Program.id != exclude_program_id)
+    for other in session.exec(statement).all():
+        other.is_active = False
+        session.add(other)
+
+
+# Fields callers are allowed to change via update_program. An explicit allow-list
+# instead of trusting **fields keeps this from becoming a mass-assignment sink for
+# columns like user_id/id/deleted_at that must only change through their own,
+# purpose-built paths (soft_delete_program, ownership is fixed at creation).
+_UPDATABLE_FIELDS = {
+    "name",
+    "description",
+    "start_date",
+    "end_date",
+    "is_active",
+    "weight_unit",
+    "default_progression_type",
+    "default_progression_params",
+}
+
+
 def update_program(session: Session, program: Program, **fields: Any) -> Program:
+    unknown = set(fields) - _UPDATABLE_FIELDS
+    if unknown:
+        raise ValueError(f"update_program cannot set fields: {sorted(unknown)}")
     for key, value in fields.items():
         setattr(program, key, value)
     session.add(program)

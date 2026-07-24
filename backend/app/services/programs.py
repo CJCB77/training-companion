@@ -21,6 +21,10 @@ class ProgramAccessDeniedError(Exception):
 def create_program_for_user(
     session: Session, *, user_id: int, payload: ProgramCreate
 ) -> Program:
+    # Enforce a single active program per user: if this one comes in active, turn
+    # off any others first, in the same transaction create_program commits.
+    if payload.is_active:
+        programs_repo.deactivate_other_active_programs(session, user_id)
     return programs_repo.create_program(
         session,
         user_id=user_id,
@@ -60,6 +64,12 @@ def update_program(
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         return program
+    # Same single-active enforcement as create: activating this program deactivates
+    # any other active one owned by the same user, atomically with this update.
+    if updates.get("is_active") is True:
+        programs_repo.deactivate_other_active_programs(
+            session, user_id, exclude_program_id=program.id
+        )
     return programs_repo.update_program(session, program, **updates)
 
 
