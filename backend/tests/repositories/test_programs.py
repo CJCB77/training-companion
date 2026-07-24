@@ -70,6 +70,16 @@ def test_update_program_applies_given_fields(db_session):
     assert refetched.name == "Renamed"
 
 
+def test_update_program_with_disallowed_field_raises_value_error(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    program = make_program(user_id=user.id, name="Original")
+    _persist(db_session, program)
+
+    with pytest.raises(ValueError):
+        programs_repo.update_program(db_session, program, user_id=user.id + 1)
+
+
 def test_soft_delete_program_sets_deleted_at_and_hides_it_from_default_lookups(
     db_session,
 ):
@@ -113,6 +123,41 @@ def test_soft_deleted_active_program_excluded_from_active_lookup(db_session):
     programs_repo.soft_delete_program(db_session, program)
 
     assert programs_repo.get_active_program(db_session, user_id=user.id) is None
+
+
+def test_deactivate_other_active_programs_deactivates_only_same_user(db_session):
+    user = make_profile()
+    other = make_profile()
+    _persist(db_session, user, other)
+
+    active_one = make_program(user_id=user.id, name="Active One", is_active=True)
+    active_two = make_program(user_id=user.id, name="Active Two", is_active=True)
+    foreign_active = make_program(user_id=other.id, name="Theirs", is_active=True)
+    _persist(db_session, active_one, active_two, foreign_active)
+
+    programs_repo.deactivate_other_active_programs(db_session, user.id)
+    db_session.flush()
+
+    assert active_one.is_active is False
+    assert active_two.is_active is False
+    assert foreign_active.is_active is True
+
+
+def test_deactivate_other_active_programs_excludes_given_program_id(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+
+    newly_activated = make_program(user_id=user.id, name="New", is_active=True)
+    previously_active = make_program(user_id=user.id, name="Old", is_active=True)
+    _persist(db_session, newly_activated, previously_active)
+
+    programs_repo.deactivate_other_active_programs(
+        db_session, user.id, exclude_program_id=newly_activated.id
+    )
+    db_session.flush()
+
+    assert newly_activated.is_active is True
+    assert previously_active.is_active is False
 
 
 def test_deleting_program_cascades_to_full_tree(db_session):

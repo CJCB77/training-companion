@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.schemas.programs import ProgramUpdate
+from app.schemas.programs import ProgramCreate, ProgramUpdate
 from app.services import programs as programs_service
 from tests.factories import make_program
 
@@ -218,6 +218,137 @@ def test_delete_program_for_other_users_program_raises_access_denied(monkeypatch
             MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID
         )
     soft_delete_mock.assert_not_called()
+
+
+def test_create_program_for_user_with_is_active_true_deactivates_others_first(
+    monkeypatch,
+):
+    # Arrange
+    created = _owned_program()
+    create_mock = MagicMock(return_value=created)
+    deactivate_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "create_program", create_mock)
+    monkeypatch.setattr(
+        programs_service.programs_repo,
+        "deactivate_other_active_programs",
+        deactivate_mock,
+    )
+    payload = ProgramCreate(name="New Block", is_active=True)
+    session = MagicMock()
+
+    # Act
+    programs_service.create_program_for_user(session, user_id=OWNER_ID, payload=payload)
+
+    # Assert
+    deactivate_mock.assert_called_once_with(session, OWNER_ID)
+    create_mock.assert_called_once()
+
+
+def test_create_program_for_user_with_is_active_false_does_not_deactivate_others(
+    monkeypatch,
+):
+    # Arrange
+    created = _owned_program()
+    create_mock = MagicMock(return_value=created)
+    deactivate_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "create_program", create_mock)
+    monkeypatch.setattr(
+        programs_service.programs_repo,
+        "deactivate_other_active_programs",
+        deactivate_mock,
+    )
+    payload = ProgramCreate(name="New Block", is_active=False)
+    session = MagicMock()
+
+    # Act
+    programs_service.create_program_for_user(session, user_id=OWNER_ID, payload=payload)
+
+    # Assert
+    deactivate_mock.assert_not_called()
+    create_mock.assert_called_once()
+
+
+def test_update_program_setting_is_active_true_deactivates_others_first(monkeypatch):
+    # Arrange
+    program = _owned_program(is_active=False)
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: program
+    )
+    update_mock = MagicMock(side_effect=lambda session, prog, **fields: prog)
+    deactivate_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "update_program", update_mock)
+    monkeypatch.setattr(
+        programs_service.programs_repo,
+        "deactivate_other_active_programs",
+        deactivate_mock,
+    )
+    session = MagicMock()
+    payload = ProgramUpdate(is_active=True)
+
+    # Act
+    programs_service.update_program(
+        session, user_id=OWNER_ID, program_id=PROGRAM_ID, payload=payload
+    )
+
+    # Assert
+    deactivate_mock.assert_called_once_with(
+        session, OWNER_ID, exclude_program_id=PROGRAM_ID
+    )
+    update_mock.assert_called_once()
+
+
+def test_update_program_setting_is_active_false_does_not_deactivate_others(
+    monkeypatch,
+):
+    # Arrange
+    program = _owned_program(is_active=True)
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: program
+    )
+    update_mock = MagicMock(side_effect=lambda session, prog, **fields: prog)
+    deactivate_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "update_program", update_mock)
+    monkeypatch.setattr(
+        programs_service.programs_repo,
+        "deactivate_other_active_programs",
+        deactivate_mock,
+    )
+    payload = ProgramUpdate(is_active=False)
+
+    # Act
+    programs_service.update_program(
+        MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID, payload=payload
+    )
+
+    # Assert
+    deactivate_mock.assert_not_called()
+
+
+def test_update_program_without_touching_is_active_does_not_deactivate_others(
+    monkeypatch,
+):
+    # Arrange
+    program = _owned_program(is_active=True, name="Original")
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: program
+    )
+    update_mock = MagicMock(side_effect=lambda session, prog, **fields: prog)
+    deactivate_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "update_program", update_mock)
+    monkeypatch.setattr(
+        programs_service.programs_repo,
+        "deactivate_other_active_programs",
+        deactivate_mock,
+    )
+    payload = ProgramUpdate(name="Renamed")
+
+    # Act
+    programs_service.update_program(
+        MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID, payload=payload
+    )
+
+    # Assert
+    deactivate_mock.assert_not_called()
 
 
 def test_list_programs_scopes_to_the_given_user(monkeypatch):
