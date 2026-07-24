@@ -45,30 +45,24 @@ def _program_read_double(user_id: int) -> object:
 
 
 def test_create_program_without_auth_returns_401(client):
-    # Arrange
     payload = {"name": "My Strength Block"}
 
-    # Act
     response = client.post("/programs", json=payload)
 
-    # Assert
     assert response.status_code == 401
 
 
 def test_create_program_returns_201_and_created_program(
     authenticated_client, current_user, monkeypatch
 ):
-    # Arrange
     created = _program_read_double(current_user.id)
     monkeypatch.setattr(
         programs_service, "create_program_for_user", lambda *a, **k: created
     )
     payload = {"name": "My Strength Block"}
 
-    # Act
     response = authenticated_client.post("/programs", json=payload)
 
-    # Assert
     assert response.status_code == 201
     assert response.json()["name"] == "Texas Method"
     assert response.json()["id"] == PROGRAM_ID
@@ -77,14 +71,11 @@ def test_create_program_returns_201_and_created_program(
 def test_list_programs_returns_only_the_services_result(
     authenticated_client, current_user, monkeypatch
 ):
-    # Arrange
     programs = [_program_read_double(current_user.id)]
     monkeypatch.setattr(programs_service, "list_programs", lambda *a, **k: programs)
 
-    # Act
     response = authenticated_client.get("/programs")
 
-    # Assert
     assert response.status_code == 200
     assert len(response.json()) == 1
 
@@ -92,45 +83,37 @@ def test_list_programs_returns_only_the_services_result(
 def test_get_program_owned_by_caller_returns_200(
     authenticated_client, current_user, monkeypatch
 ):
-    # Arrange
     program = _program_read_double(current_user.id)
     monkeypatch.setattr(programs_service, "get_owned_program", lambda *a, **k: program)
 
-    # Act
     response = authenticated_client.get(f"/programs/{PROGRAM_ID}")
 
-    # Assert
     assert response.status_code == 200
     assert response.json()["id"] == PROGRAM_ID
 
 
 def test_get_program_that_does_not_exist_returns_404(authenticated_client, monkeypatch):
-    # Arrange
     def _raise(*args, **kwargs):
         raise programs_service.ProgramNotFoundError(PROGRAM_ID)
 
     monkeypatch.setattr(programs_service, "get_owned_program", _raise)
 
-    # Act
     response = authenticated_client.get(f"/programs/{PROGRAM_ID}")
 
-    # Assert
     assert response.status_code == 404
 
 
 def test_get_program_owned_by_another_user_also_returns_404(
     authenticated_client, monkeypatch
 ):
-    # Arrange: access-denied must be indistinguishable from not-found to the caller.
+    # Access-denied must be indistinguishable from not-found to the caller.
     def _raise(*args, **kwargs):
         raise programs_service.ProgramAccessDeniedError(PROGRAM_ID)
 
     monkeypatch.setattr(programs_service, "get_owned_program", _raise)
 
-    # Act
     response = authenticated_client.get(f"/programs/{PROGRAM_ID}")
 
-    # Assert
     assert response.status_code == 404
     assert response.json()["detail"] == "Program not found"
 
@@ -138,87 +121,69 @@ def test_get_program_owned_by_another_user_also_returns_404(
 def test_update_program_owned_by_caller_returns_200(
     authenticated_client, current_user, monkeypatch
 ):
-    # Arrange
     updated = _program_read_double(current_user.id)
     monkeypatch.setattr(programs_service, "update_program", lambda *a, **k: updated)
 
-    # Act
     response = authenticated_client.put(
         f"/programs/{PROGRAM_ID}", json={"name": "Renamed"}
     )
 
-    # Assert
     assert response.status_code == 200
 
 
 def test_update_program_not_found_returns_404(authenticated_client, monkeypatch):
-    # Arrange
     def _raise(*args, **kwargs):
         raise programs_service.ProgramNotFoundError(PROGRAM_ID)
 
     monkeypatch.setattr(programs_service, "update_program", _raise)
 
-    # Act
     response = authenticated_client.put(
         f"/programs/{PROGRAM_ID}", json={"name": "Renamed"}
     )
 
-    # Assert
     assert response.status_code == 404
 
 
 def test_update_program_access_denied_returns_404(authenticated_client, monkeypatch):
-    # Arrange
     def _raise(*args, **kwargs):
         raise programs_service.ProgramAccessDeniedError(PROGRAM_ID)
 
     monkeypatch.setattr(programs_service, "update_program", _raise)
 
-    # Act
     response = authenticated_client.put(
         f"/programs/{PROGRAM_ID}", json={"name": "Renamed"}
     )
 
-    # Assert
     assert response.status_code == 404
 
 
 def test_delete_program_owned_by_caller_returns_204(authenticated_client, monkeypatch):
-    # Arrange
     delete_mock = MagicMock(return_value=None)
     monkeypatch.setattr(programs_service, "delete_program", delete_mock)
 
-    # Act
     response = authenticated_client.delete(f"/programs/{PROGRAM_ID}")
 
-    # Assert
     assert response.status_code == 204
     delete_mock.assert_called_once()
 
 
 def test_delete_program_not_found_returns_404(authenticated_client, monkeypatch):
-    # Arrange
     def _raise(*args, **kwargs):
         raise programs_service.ProgramNotFoundError(PROGRAM_ID)
 
     monkeypatch.setattr(programs_service, "delete_program", _raise)
 
-    # Act
     response = authenticated_client.delete(f"/programs/{PROGRAM_ID}")
 
-    # Assert
     assert response.status_code == 404
 
 
 def test_delete_program_access_denied_returns_404(authenticated_client, monkeypatch):
-    # Arrange
     def _raise(*args, **kwargs):
         raise programs_service.ProgramAccessDeniedError(PROGRAM_ID)
 
     monkeypatch.setattr(programs_service, "delete_program", _raise)
 
-    # Act
     response = authenticated_client.delete(f"/programs/{PROGRAM_ID}")
 
-    # Assert
     assert response.status_code == 404
