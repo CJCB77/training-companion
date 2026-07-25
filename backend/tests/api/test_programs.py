@@ -167,6 +167,89 @@ def test_update_program_access_denied_returns_404(authenticated_client, monkeypa
     assert response.status_code == 404
 
 
+def test_list_programs_passes_include_archived_query_param_through(
+    authenticated_client, current_user, monkeypatch
+):
+    list_mock = MagicMock(return_value=[])
+    monkeypatch.setattr(programs_service, "list_programs", list_mock)
+
+    response = authenticated_client.get("/programs?include_archived=true")
+
+    assert response.status_code == 200
+    _, called_kwargs = list_mock.call_args
+    assert called_kwargs["include_archived"] is True
+
+
+def test_archive_program_owned_by_caller_returns_200(
+    authenticated_client, current_user, monkeypatch
+):
+    archived = _program_read_double(current_user.id)
+    monkeypatch.setattr(programs_service, "archive_program", lambda *a, **k: archived)
+
+    response = authenticated_client.post(f"/programs/{PROGRAM_ID}/archive")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == PROGRAM_ID
+
+
+def test_archive_program_not_found_returns_404(authenticated_client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise programs_service.ProgramNotFoundError(PROGRAM_ID)
+
+    monkeypatch.setattr(programs_service, "archive_program", _raise)
+
+    response = authenticated_client.post(f"/programs/{PROGRAM_ID}/archive")
+
+    assert response.status_code == 404
+
+
+def test_archive_program_access_denied_returns_404(authenticated_client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise programs_service.ProgramAccessDeniedError(PROGRAM_ID)
+
+    monkeypatch.setattr(programs_service, "archive_program", _raise)
+
+    response = authenticated_client.post(f"/programs/{PROGRAM_ID}/archive")
+
+    assert response.status_code == 404
+
+
+def test_unarchive_program_owned_by_caller_returns_200(
+    authenticated_client, current_user, monkeypatch
+):
+    unarchived = _program_read_double(current_user.id)
+    monkeypatch.setattr(
+        programs_service, "unarchive_program", lambda *a, **k: unarchived
+    )
+
+    response = authenticated_client.post(f"/programs/{PROGRAM_ID}/unarchive")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == PROGRAM_ID
+
+
+def test_unarchive_program_not_found_returns_404(authenticated_client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise programs_service.ProgramNotFoundError(PROGRAM_ID)
+
+    monkeypatch.setattr(programs_service, "unarchive_program", _raise)
+
+    response = authenticated_client.post(f"/programs/{PROGRAM_ID}/unarchive")
+
+    assert response.status_code == 404
+
+
+def test_unarchive_program_access_denied_returns_404(authenticated_client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise programs_service.ProgramAccessDeniedError(PROGRAM_ID)
+
+    monkeypatch.setattr(programs_service, "unarchive_program", _raise)
+
+    response = authenticated_client.post(f"/programs/{PROGRAM_ID}/unarchive")
+
+    assert response.status_code == 404
+
+
 def test_delete_program_owned_by_caller_returns_204(authenticated_client, monkeypatch):
     delete_mock = MagicMock(return_value=None)
     monkeypatch.setattr(programs_service, "delete_program", delete_mock)
