@@ -5,6 +5,7 @@ the ownership enforcement and partial-update orchestration that actually lives i
 the service, not the database.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -142,38 +143,34 @@ def test_update_program_for_other_users_program_raises_access_denied(monkeypatch
         )
 
 
-def test_delete_program_soft_deletes_owned_program(monkeypatch):
+def test_delete_program_hard_deletes_owned_program(monkeypatch):
     program = _owned_program()
     monkeypatch.setattr(
         programs_service.programs_repo, "get_program", lambda *a, **k: program
     )
-    soft_delete_mock = MagicMock()
-    monkeypatch.setattr(
-        programs_service.programs_repo, "soft_delete_program", soft_delete_mock
-    )
+    delete_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "delete_program", delete_mock)
 
     programs_service.delete_program(
         MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID
     )
 
-    soft_delete_mock.assert_called_once()
-    assert soft_delete_mock.call_args[0][1] is program
+    delete_mock.assert_called_once()
+    assert delete_mock.call_args[0][1] is program
 
 
 def test_delete_program_for_missing_program_raises_not_found(monkeypatch):
     monkeypatch.setattr(
         programs_service.programs_repo, "get_program", lambda *a, **k: None
     )
-    soft_delete_mock = MagicMock()
-    monkeypatch.setattr(
-        programs_service.programs_repo, "soft_delete_program", soft_delete_mock
-    )
+    delete_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "delete_program", delete_mock)
 
     with pytest.raises(programs_service.ProgramNotFoundError):
         programs_service.delete_program(
             MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID
         )
-    soft_delete_mock.assert_not_called()
+    delete_mock.assert_not_called()
 
 
 def test_delete_program_for_other_users_program_raises_access_denied(monkeypatch):
@@ -181,16 +178,112 @@ def test_delete_program_for_other_users_program_raises_access_denied(monkeypatch
     monkeypatch.setattr(
         programs_service.programs_repo, "get_program", lambda *a, **k: program
     )
-    soft_delete_mock = MagicMock()
-    monkeypatch.setattr(
-        programs_service.programs_repo, "soft_delete_program", soft_delete_mock
-    )
+    delete_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "delete_program", delete_mock)
 
     with pytest.raises(programs_service.ProgramAccessDeniedError):
         programs_service.delete_program(
             MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID
         )
-    soft_delete_mock.assert_not_called()
+    delete_mock.assert_not_called()
+
+
+def test_archive_program_archives_owned_program(monkeypatch):
+    program = _owned_program()
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: program
+    )
+    archive_mock = MagicMock(return_value=program)
+    monkeypatch.setattr(programs_service.programs_repo, "archive_program", archive_mock)
+
+    result = programs_service.archive_program(
+        MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID
+    )
+
+    archive_mock.assert_called_once()
+    assert archive_mock.call_args[0][1] is program
+    assert result is program
+
+
+def test_archive_program_for_missing_program_raises_not_found(monkeypatch):
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: None
+    )
+    archive_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "archive_program", archive_mock)
+
+    with pytest.raises(programs_service.ProgramNotFoundError):
+        programs_service.archive_program(
+            MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID
+        )
+    archive_mock.assert_not_called()
+
+
+def test_archive_program_for_other_users_program_raises_access_denied(monkeypatch):
+    program = _owned_program(user_id=OTHER_USER_ID)
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: program
+    )
+    archive_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "archive_program", archive_mock)
+
+    with pytest.raises(programs_service.ProgramAccessDeniedError):
+        programs_service.archive_program(
+            MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID
+        )
+    archive_mock.assert_not_called()
+
+
+def test_unarchive_program_unarchives_owned_program(monkeypatch):
+    program = _owned_program()
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: program
+    )
+    unarchive_mock = MagicMock(return_value=program)
+    monkeypatch.setattr(
+        programs_service.programs_repo, "unarchive_program", unarchive_mock
+    )
+
+    result = programs_service.unarchive_program(
+        MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID
+    )
+
+    unarchive_mock.assert_called_once()
+    assert unarchive_mock.call_args[0][1] is program
+    assert result is program
+
+
+def test_unarchive_program_for_missing_program_raises_not_found(monkeypatch):
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: None
+    )
+    unarchive_mock = MagicMock()
+    monkeypatch.setattr(
+        programs_service.programs_repo, "unarchive_program", unarchive_mock
+    )
+
+    with pytest.raises(programs_service.ProgramNotFoundError):
+        programs_service.unarchive_program(
+            MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID
+        )
+    unarchive_mock.assert_not_called()
+
+
+def test_unarchive_program_for_other_users_program_raises_access_denied(monkeypatch):
+    program = _owned_program(user_id=OTHER_USER_ID)
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: program
+    )
+    unarchive_mock = MagicMock()
+    monkeypatch.setattr(
+        programs_service.programs_repo, "unarchive_program", unarchive_mock
+    )
+
+    with pytest.raises(programs_service.ProgramAccessDeniedError):
+        programs_service.unarchive_program(
+            MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID
+        )
+    unarchive_mock.assert_not_called()
 
 
 def test_create_program_for_user_with_is_active_true_deactivates_others_first(
@@ -285,6 +378,66 @@ def test_update_program_setting_is_active_false_does_not_deactivate_others(
     deactivate_mock.assert_not_called()
 
 
+def test_update_program_activating_an_archived_program_unarchives_it_first(
+    monkeypatch,
+):
+    program = _owned_program(is_active=False)
+    program.archived_at = datetime.now(timezone.utc)
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: program
+    )
+    unarchive_mock = MagicMock(side_effect=lambda session, prog: prog)
+    monkeypatch.setattr(
+        programs_service.programs_repo, "unarchive_program", unarchive_mock
+    )
+    update_mock = MagicMock(side_effect=lambda session, prog, **fields: prog)
+    deactivate_mock = MagicMock()
+    monkeypatch.setattr(programs_service.programs_repo, "update_program", update_mock)
+    monkeypatch.setattr(
+        programs_service.programs_repo,
+        "deactivate_other_active_programs",
+        deactivate_mock,
+    )
+    session = MagicMock()
+    payload = ProgramUpdate(is_active=True)
+
+    programs_service.update_program(
+        session, user_id=OWNER_ID, program_id=PROGRAM_ID, payload=payload
+    )
+
+    unarchive_mock.assert_called_once_with(session, program)
+    deactivate_mock.assert_called_once_with(
+        session, OWNER_ID, exclude_program_id=PROGRAM_ID
+    )
+
+
+def test_update_program_activating_a_non_archived_program_does_not_unarchive(
+    monkeypatch,
+):
+    program = _owned_program(is_active=False)
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: program
+    )
+    unarchive_mock = MagicMock(side_effect=lambda session, prog: prog)
+    monkeypatch.setattr(
+        programs_service.programs_repo, "unarchive_program", unarchive_mock
+    )
+    update_mock = MagicMock(side_effect=lambda session, prog, **fields: prog)
+    monkeypatch.setattr(programs_service.programs_repo, "update_program", update_mock)
+    monkeypatch.setattr(
+        programs_service.programs_repo,
+        "deactivate_other_active_programs",
+        MagicMock(),
+    )
+    payload = ProgramUpdate(is_active=True)
+
+    programs_service.update_program(
+        MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID, payload=payload
+    )
+
+    unarchive_mock.assert_not_called()
+
+
 def test_update_program_without_touching_is_active_does_not_deactivate_others(
     monkeypatch,
 ):
@@ -318,4 +471,16 @@ def test_list_programs_scopes_to_the_given_user(monkeypatch):
 
     programs_service.list_programs(session, user_id=OWNER_ID)
 
-    list_mock.assert_called_once_with(session, user_id=OWNER_ID)
+    list_mock.assert_called_once_with(session, user_id=OWNER_ID, include_archived=False)
+
+
+def test_list_programs_passes_include_archived_through_to_the_repo(monkeypatch):
+    list_mock = MagicMock(return_value=[])
+    monkeypatch.setattr(
+        programs_service.programs_repo, "list_programs_for_user", list_mock
+    )
+    session = MagicMock()
+
+    programs_service.list_programs(session, user_id=OWNER_ID, include_archived=True)
+
+    list_mock.assert_called_once_with(session, user_id=OWNER_ID, include_archived=True)

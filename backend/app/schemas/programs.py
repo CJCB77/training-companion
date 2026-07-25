@@ -42,5 +42,6 @@ class ProgramRead(BaseModel):
     weight_unit: WeightUnit
     default_progression_type: ProgressionType | None
     default_progression_params: dict | None
+    archived_at: datetime | None
     created_at: datetime
     updated_at: datetime

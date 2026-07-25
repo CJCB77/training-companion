@@ -47,10 +47,11 @@ class Program(SQLModel, table=True):
         default=None, sa_column=sa.Column(JSONB, nullable=True)
     )
 
-    # Soft delete: NULL means active. Set on DELETE /programs/{id} instead of removing
-    # the row, so the full week -> session -> prescription tree (and training history
-    # built on top of it) survives.
-    deleted_at: datetime | None = Field(
+    # Archive: NULL means not archived. Archiving hides a program from the default list
+    # while retaining all of its data (see POST /programs/{id}/archive); it does not
+    # delete anything. Archived programs are never active — see Program's Entity
+    # Lifecycle Conventions in CLAUDE.md for the full active/archived/deleted split.
+    archived_at: datetime | None = Field(
         default=None,
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
     )
