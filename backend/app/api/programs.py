@@ -29,10 +29,13 @@ def create_program(
 
 @router.get("", response_model=list[ProgramRead])
 def list_programs(
+    include_archived: bool = False,
     current_user: Profile = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> list[ProgramRead]:
-    return programs_service.list_programs(session, user_id=current_user.id)
+    return programs_service.list_programs(
+        session, user_id=current_user.id, include_archived=include_archived
+    )
 
 
 @router.get("/{program_id}", response_model=ProgramRead)
@@ -65,6 +68,40 @@ def update_program(
             user_id=current_user.id,
             program_id=program_id,
             payload=payload,
+        )
+    except (
+        programs_service.ProgramNotFoundError,
+        programs_service.ProgramAccessDeniedError,
+    ) as exc:
+        raise _not_found() from exc
+
+
+@router.post("/{program_id}/archive", response_model=ProgramRead)
+def archive_program(
+    program_id: int,
+    current_user: Profile = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> ProgramRead:
+    try:
+        return programs_service.archive_program(
+            session, user_id=current_user.id, program_id=program_id
+        )
+    except (
+        programs_service.ProgramNotFoundError,
+        programs_service.ProgramAccessDeniedError,
+    ) as exc:
+        raise _not_found() from exc
+
+
+@router.post("/{program_id}/unarchive", response_model=ProgramRead)
+def unarchive_program(
+    program_id: int,
+    current_user: Profile = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> ProgramRead:
+    try:
+        return programs_service.unarchive_program(
+            session, user_id=current_user.id, program_id=program_id
         )
     except (
         programs_service.ProgramNotFoundError,

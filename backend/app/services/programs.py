@@ -11,7 +11,7 @@ from app.schemas.programs import ProgramCreate, ProgramUpdate
 
 
 class ProgramNotFoundError(Exception):
-    """No program exists with that id (or it's been soft-deleted)."""
+    """No program exists with that id."""
 
 
 class ProgramAccessDeniedError(Exception):
@@ -39,8 +39,12 @@ def create_program_for_user(
     )
 
 
-def list_programs(session: Session, *, user_id: int) -> list[Program]:
-    return programs_repo.list_programs_for_user(session, user_id=user_id)
+def list_programs(
+    session: Session, *, user_id: int, include_archived: bool = False
+) -> list[Program]:
+    return programs_repo.list_programs_for_user(
+        session, user_id=user_id, include_archived=include_archived
+    )
 
 
 def get_owned_program(session: Session, *, user_id: int, program_id: int) -> Program:
@@ -64,15 +68,31 @@ def update_program(
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         return program
-    # Same single-active enforcement as create: activating this program deactivates
-    # any other active one owned by the same user, atomically with this update.
     if updates.get("is_active") is True:
+        # Activating an archived program implicitly unarchives it first — an archived
+        # program is never active. A separate commit here is fine: the intermediate
+        # state (unarchived, not yet active) still satisfies that invariant, so a
+        # partial failure between the two commits leaves valid data.
+        if program.archived_at is not None:
+            program = programs_repo.unarchive_program(session, program)
+        # Same single-active enforcement as create: activating this program deactivates
+        # any other active one owned by the same user, atomically with this update.
         programs_repo.deactivate_other_active_programs(
             session, user_id, exclude_program_id=program.id
         )
     return programs_repo.update_program(session, program, **updates)
 
 
+def archive_program(session: Session, *, user_id: int, program_id: int) -> Program:
+    program = get_owned_program(session, user_id=user_id, program_id=program_id)
+    return programs_repo.archive_program(session, program)
+
+
+def unarchive_program(session: Session, *, user_id: int, program_id: int) -> Program:
+    program = get_owned_program(session, user_id=user_id, program_id=program_id)
+    return programs_repo.unarchive_program(session, program)
+
+
 def delete_program(session: Session, *, user_id: int, program_id: int) -> None:
     program = get_owned_program(session, user_id=user_id, program_id=program_id)
-    programs_repo.soft_delete_program(session, program)
+    programs_repo.delete_program(session, program)
