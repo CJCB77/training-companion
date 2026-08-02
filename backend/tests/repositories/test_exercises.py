@@ -141,3 +141,32 @@ def test_duplicate_system_exercise_name_is_rejected(db_session):
     db_session.add(dup)
     with pytest.raises(Exception):  # IntegrityError surfaced on flush
         db_session.flush()
+
+
+def test_duplicate_custom_exercise_name_for_same_user_is_rejected(db_session):
+    # uq_exercise_user_name forbids one user from having two custom exercises with
+    # the same name, case-insensitively — the DB-level backstop for the race the
+    # service's check-then-act name lookup can't fully close on its own.
+    user = make_profile()
+    _persist(db_session, user)
+    _persist(db_session, make_exercise(name="My Curl", created_by_user_id=user.id))
+
+    dup = make_exercise(name="MY CURL", created_by_user_id=user.id)
+    db_session.add(dup)
+    with pytest.raises(Exception):  # IntegrityError surfaced on flush
+        db_session.flush()
+
+
+def test_duplicate_custom_exercise_name_across_users_is_allowed(db_session):
+    # uq_exercise_user_name is scoped by created_by_user_id, so it must never
+    # constrain one user's custom exercise names against another's.
+    user = make_profile()
+    other = make_profile()
+    _persist(db_session, user, other)
+    _persist(db_session, make_exercise(name="My Curl", created_by_user_id=user.id))
+
+    same_name_other_owner = make_exercise(name="My Curl", created_by_user_id=other.id)
+    db_session.add(same_name_other_owner)
+    db_session.flush()  # should not raise
+
+    assert same_name_other_owner.id is not None

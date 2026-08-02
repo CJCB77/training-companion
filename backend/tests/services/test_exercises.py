@@ -8,6 +8,7 @@ service, not the database.
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.models.enums import Equipment, MuscleGroup
 from app.schemas.exercises import ExerciseCreate
@@ -166,3 +167,27 @@ def test_create_custom_exercise_matching_another_users_custom_is_not_a_collision
 
     assert result is created
     create_mock.assert_called_once()
+
+
+def test_create_custom_exercise_raises_duplicate_on_race_lost_at_commit(monkeypatch):
+    # Simulates two concurrent requests both passing the name check before either
+    # commits: the repo's insert then hits uq_exercise_user_name and raises
+    # IntegrityError, which the service must translate to the same public error
+    # the pre-check path raises, and must roll back the session.
+    monkeypatch.setattr(
+        exercises_service.exercises_repo,
+        "find_visible_exercise_by_name",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        exercises_service.exercises_repo,
+        "create_exercise",
+        MagicMock(side_effect=IntegrityError("INSERT", {}, Exception("dup"))),
+    )
+    session = MagicMock()
+
+    with pytest.raises(exercises_service.DuplicateExerciseNameError):
+        exercises_service.create_custom_exercise(
+            session, user_id=OWNER_ID, payload=_create_payload()
+        )
+    session.rollback.assert_called_once()
