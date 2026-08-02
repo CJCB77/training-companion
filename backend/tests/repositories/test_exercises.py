@@ -1,6 +1,6 @@
 import pytest
 
-from app.models.enums import Equipment, MuscleGroup
+from app.models.enums import Equipment, ExerciseCategory, MuscleGroup
 from app.repositories import exercises as exercises_repo
 from tests.factories import make_exercise, make_profile
 
@@ -54,6 +54,70 @@ def test_list_exercises_filters_by_muscle_group(db_session):
     names = {e.name for e in result}
     assert "Preacher Curl" in names
     assert "Hack Squat" not in names
+
+
+def test_list_exercises_filters_by_search_case_insensitively(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+
+    sissy_squat = make_exercise(name="Sissy Squat", created_by_user_id=user.id)
+    preacher = make_exercise(name="Preacher Curl", created_by_user_id=user.id)
+    _persist(db_session, sissy_squat, preacher)
+
+    result = exercises_repo.list_exercises(db_session, user_id=user.id, search="sissy")
+    names = {e.name for e in result}
+    assert "Sissy Squat" in names
+    assert "Preacher Curl" not in names
+
+
+def test_list_exercises_filters_by_category(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+
+    compound = make_exercise(
+        name="Front Squat",
+        created_by_user_id=user.id,
+        category=ExerciseCategory.COMPOUND,
+    )
+    isolation = make_exercise(
+        name="Leg Extension",
+        created_by_user_id=user.id,
+        category=ExerciseCategory.ISOLATION,
+    )
+    _persist(db_session, compound, isolation)
+
+    result = exercises_repo.list_exercises(
+        db_session, user_id=user.id, category=ExerciseCategory.ISOLATION
+    )
+    names = {e.name for e in result}
+    assert "Leg Extension" in names
+    assert "Front Squat" not in names
+
+
+def test_find_visible_exercise_by_name_matches_case_insensitively(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    _persist(db_session, make_exercise(name="Sissy Squat", created_by_user_id=user.id))
+
+    found = exercises_repo.find_visible_exercise_by_name(
+        db_session, user_id=user.id, name="  sissy squat  "
+    )
+
+    assert found is not None
+    assert found.name == "Sissy Squat"
+
+
+def test_find_visible_exercise_by_name_does_not_match_another_users_custom(db_session):
+    user = make_profile()
+    other = make_profile()
+    _persist(db_session, user, other)
+    _persist(db_session, make_exercise(name="Their Curl", created_by_user_id=other.id))
+
+    found = exercises_repo.find_visible_exercise_by_name(
+        db_session, user_id=user.id, name="Their Curl"
+    )
+
+    assert found is None
 
 
 def test_create_exercise_persists_custom(db_session):
