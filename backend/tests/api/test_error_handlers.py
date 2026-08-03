@@ -66,6 +66,23 @@ def authenticated_client_no_raise(current_user):
         app.dependency_overrides.pop(get_session, None)
 
 
+@pytest.fixture
+def client_with_fake_session():
+    """A client with only `get_session` overridden — `get_current_user` is left as-is.
+
+    Needed for tests that send a *present but invalid* Bearer token: HTTPBearer
+    succeeds, so FastAPI resolves get_current_user's other sub-dependency
+    (get_session) before validate_token() ever runs and rejects the token. Without
+    a fake session, that resolution calls create_engine() against DATABASE_URL,
+    which isn't configured in the unit-test environment.
+    """
+    app.dependency_overrides[get_session] = _fake_session
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+
 def _create_exercise_payload(**overrides) -> dict:
     payload = {
         "name": "Bulgarian Split Squat",
@@ -185,8 +202,10 @@ def test_wrong_method_on_known_route_returns_405_with_error_envelope(client):
     assert "GET" in response.headers["allow"]
 
 
-def test_invalid_token_returns_401_with_www_authenticate_header(client):
-    response = client.get(
+def test_invalid_token_returns_401_with_www_authenticate_header(
+    client_with_fake_session,
+):
+    response = client_with_fake_session.get(
         "/exercises", headers={"Authorization": "Bearer not-a-real-jwt"}
     )
     body = response.json()
