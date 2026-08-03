@@ -125,7 +125,7 @@ def test_get_program_owned_by_another_user_also_returns_404(
     response = authenticated_client.get(f"/programs/{PROGRAM_ID}")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "Program not found"
+    assert response.json()["error"]["message"] == "Program not found"
 
 
 def test_update_program_owned_by_caller_returns_200(
