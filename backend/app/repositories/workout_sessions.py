@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlmodel import Session, select
@@ -86,3 +87,31 @@ def delete_workout_session(session: Session, workout_session: WorkoutSession) ->
     """
     session.delete(workout_session)
     session.commit()
+
+
+def start_workout_session(
+    session: Session, workout_session: WorkoutSession
+) -> WorkoutSession:
+    """Mark a session in-progress. Idempotent: if already started, the existing
+    started_at timestamp is left alone so "when was this started" stays stable.
+    """
+    if workout_session.started_at is None:
+        workout_session.started_at = datetime.now(timezone.utc)
+    session.add(workout_session)
+    session.commit()
+    session.refresh(workout_session)
+    return workout_session
+
+
+def complete_workout_session(
+    session: Session, workout_session: WorkoutSession
+) -> WorkoutSession:
+    """Mark a session complete. Idempotent: if already completed, the existing
+    completed_at timestamp is left alone.
+    """
+    if workout_session.completed_at is None:
+        workout_session.completed_at = datetime.now(timezone.utc)
+    session.add(workout_session)
+    session.commit()
+    session.refresh(workout_session)
+    return workout_session

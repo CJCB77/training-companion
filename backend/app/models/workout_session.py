@@ -27,6 +27,20 @@ class WorkoutSession(SQLModel, table=True):
     # Position of this session within its week ("order" is a reserved SQL word).
     order_index: int
 
+    # Execution state, derived (never stored as a separate status column): NULL
+    # started_at = not started; started_at set, completed_at NULL = in progress;
+    # both set = completed. See app/schemas/workout_sessions.py for the derived
+    # `status` field exposed to clients.
+    started_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    completed_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+    )
+    notes: str | None = None
+
     created_at: datetime | None = created_at_column()
     updated_at: datetime | None = updated_at_column()
 

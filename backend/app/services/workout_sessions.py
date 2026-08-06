@@ -116,3 +116,21 @@ def delete_workout_session(
         session, user_id=user_id, workout_session_id=workout_session_id
     )
     workout_sessions_repo.delete_workout_session(session, workout_session)
+
+
+def start_workout_session(
+    session: Session, *, user_id: int, workout_session_id: int
+) -> WorkoutSession:
+    workout_session = get_owned_workout_session(
+        session, user_id=user_id, workout_session_id=workout_session_id
+    )
+    return workout_sessions_repo.start_workout_session(session, workout_session)
+
+
+def complete_workout_session(
+    session: Session, *, user_id: int, workout_session_id: int
+) -> WorkoutSession:
+    workout_session = get_owned_workout_session(
+        session, user_id=user_id, workout_session_id=workout_session_id
+    )
+    return workout_sessions_repo.complete_workout_session(session, workout_session)

@@ -41,3 +41,9 @@ class Equipment(StrEnum):
 class ExerciseCategory(StrEnum):
     COMPOUND = "compound"
     ISOLATION = "isolation"
+
+
+class SetCompletionState(StrEnum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"

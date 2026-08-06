@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class WorkoutSessionCreate(BaseModel):
@@ -27,5 +27,20 @@ class WorkoutSessionRead(BaseModel):
     week_id: int
     day_name: str
     order_index: int
+    started_at: datetime | None
+    completed_at: datetime | None
+    notes: str | None
     created_at: datetime
     updated_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status(self) -> str:
+        """Derived from started_at/completed_at, never stored: not_started,
+        in_progress, or completed.
+        """
+        if self.completed_at is not None:
+            return "completed"
+        if self.started_at is not None:
+            return "in_progress"
+        return "not_started"
