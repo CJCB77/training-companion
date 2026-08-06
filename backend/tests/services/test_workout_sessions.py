@@ -364,3 +364,157 @@ def test_update_workout_session_with_null_order_index_raises_invalid_update(
             payload=payload,
         )
     update_mock.assert_not_called()
+
+
+def test_start_workout_session_checks_ownership_before_starting(monkeypatch):
+    workout_session = _session()
+    get_owned_mock = MagicMock(return_value=workout_session)
+    monkeypatch.setattr(
+        workout_sessions_service, "get_owned_workout_session", get_owned_mock
+    )
+    start_mock = MagicMock(return_value=workout_session)
+    monkeypatch.setattr(
+        workout_sessions_service.workout_sessions_repo,
+        "start_workout_session",
+        start_mock,
+    )
+    session = MagicMock()
+
+    result = workout_sessions_service.start_workout_session(
+        session, user_id=OWNER_ID, workout_session_id=SESSION_ID
+    )
+
+    get_owned_mock.assert_called_once_with(
+        session, user_id=OWNER_ID, workout_session_id=SESSION_ID
+    )
+    start_mock.assert_called_once_with(session, workout_session)
+    assert result is workout_session
+
+
+def test_start_workout_session_for_other_users_session_raises_access_denied(
+    monkeypatch,
+):
+    def _raise(*args, **kwargs):
+        raise workout_sessions_service.WorkoutSessionAccessDeniedError(SESSION_ID)
+
+    monkeypatch.setattr(workout_sessions_service, "get_owned_workout_session", _raise)
+    start_mock = MagicMock()
+    monkeypatch.setattr(
+        workout_sessions_service.workout_sessions_repo,
+        "start_workout_session",
+        start_mock,
+    )
+
+    with pytest.raises(workout_sessions_service.WorkoutSessionAccessDeniedError):
+        workout_sessions_service.start_workout_session(
+            MagicMock(), user_id=OWNER_ID, workout_session_id=SESSION_ID
+        )
+    start_mock.assert_not_called()
+
+
+def test_complete_workout_session_checks_ownership_before_completing(monkeypatch):
+    workout_session = _session()
+    get_owned_mock = MagicMock(return_value=workout_session)
+    monkeypatch.setattr(
+        workout_sessions_service, "get_owned_workout_session", get_owned_mock
+    )
+    complete_mock = MagicMock(return_value=workout_session)
+    monkeypatch.setattr(
+        workout_sessions_service.workout_sessions_repo,
+        "complete_workout_session",
+        complete_mock,
+    )
+    session = MagicMock()
+
+    result = workout_sessions_service.complete_workout_session(
+        session, user_id=OWNER_ID, workout_session_id=SESSION_ID
+    )
+
+    get_owned_mock.assert_called_once_with(
+        session, user_id=OWNER_ID, workout_session_id=SESSION_ID
+    )
+    complete_mock.assert_called_once_with(session, workout_session)
+    assert result is workout_session
+
+
+def test_complete_workout_session_for_other_users_session_raises_access_denied(
+    monkeypatch,
+):
+    def _raise(*args, **kwargs):
+        raise workout_sessions_service.WorkoutSessionAccessDeniedError(SESSION_ID)
+
+    monkeypatch.setattr(workout_sessions_service, "get_owned_workout_session", _raise)
+    complete_mock = MagicMock()
+    monkeypatch.setattr(
+        workout_sessions_service.workout_sessions_repo,
+        "complete_workout_session",
+        complete_mock,
+    )
+
+    with pytest.raises(workout_sessions_service.WorkoutSessionAccessDeniedError):
+        workout_sessions_service.complete_workout_session(
+            MagicMock(), user_id=OWNER_ID, workout_session_id=SESSION_ID
+        )
+    complete_mock.assert_not_called()
+
+
+def test_workout_session_read_status_with_no_timestamps_is_not_started():
+    from datetime import datetime, timezone
+
+    from app.schemas.workout_sessions import WorkoutSessionRead
+
+    read = WorkoutSessionRead(
+        id=SESSION_ID,
+        week_id=WEEK_ID,
+        day_name="Day A",
+        order_index=0,
+        started_at=None,
+        completed_at=None,
+        notes=None,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    assert read.status == "not_started"
+
+
+def test_workout_session_read_status_with_only_started_at_is_in_progress():
+    from datetime import datetime, timezone
+
+    from app.schemas.workout_sessions import WorkoutSessionRead
+
+    now = datetime.now(timezone.utc)
+    read = WorkoutSessionRead(
+        id=SESSION_ID,
+        week_id=WEEK_ID,
+        day_name="Day A",
+        order_index=0,
+        started_at=now,
+        completed_at=None,
+        notes=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    assert read.status == "in_progress"
+
+
+def test_workout_session_read_status_with_both_timestamps_is_completed():
+    from datetime import datetime, timezone
+
+    from app.schemas.workout_sessions import WorkoutSessionRead
+
+    now = datetime.now(timezone.utc)
+    read = WorkoutSessionRead(
+        id=SESSION_ID,
+        week_id=WEEK_ID,
+        day_name="Day A",
+        order_index=0,
+        started_at=now,
+        completed_at=now,
+        notes=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    assert read.status == "completed"

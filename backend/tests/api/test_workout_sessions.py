@@ -227,3 +227,58 @@ def test_update_workout_session_with_null_day_name_returns_422(
 
     assert response.status_code == 422
     assert response.json()["error"]["message"] == "day_name cannot be null"
+
+
+def test_start_workout_session_owned_by_caller_returns_200(
+    authenticated_client, monkeypatch
+):
+    started = _session_read_double()
+    monkeypatch.setattr(
+        workout_sessions_service, "start_workout_session", lambda *a, **k: started
+    )
+
+    response = authenticated_client.post(f"/workout-sessions/{SESSION_ID}/start")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == SESSION_ID
+
+
+def test_start_workout_session_for_other_users_session_returns_404(
+    authenticated_client, monkeypatch
+):
+    def _raise(*args, **kwargs):
+        raise workout_sessions_service.WorkoutSessionAccessDeniedError(SESSION_ID)
+
+    monkeypatch.setattr(workout_sessions_service, "start_workout_session", _raise)
+
+    response = authenticated_client.post(f"/workout-sessions/{SESSION_ID}/start")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["message"] == "Workout session not found"
+
+
+def test_complete_workout_session_owned_by_caller_returns_200(
+    authenticated_client, monkeypatch
+):
+    completed = _session_read_double()
+    monkeypatch.setattr(
+        workout_sessions_service, "complete_workout_session", lambda *a, **k: completed
+    )
+
+    response = authenticated_client.post(f"/workout-sessions/{SESSION_ID}/complete")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == SESSION_ID
+
+
+def test_complete_workout_session_for_other_users_session_returns_404(
+    authenticated_client, monkeypatch
+):
+    def _raise(*args, **kwargs):
+        raise workout_sessions_service.WorkoutSessionAccessDeniedError(SESSION_ID)
+
+    monkeypatch.setattr(workout_sessions_service, "complete_workout_session", _raise)
+
+    response = authenticated_client.post(f"/workout-sessions/{SESSION_ID}/complete")
+
+    assert response.status_code == 404

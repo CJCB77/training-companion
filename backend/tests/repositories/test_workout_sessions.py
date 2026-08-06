@@ -122,3 +122,57 @@ def test_delete_workout_session_cascades_to_its_exercise_prescriptions(db_sessio
     workout_sessions_repo.delete_workout_session(db_session, workout_session)
 
     assert db_session.exec(select(ExercisePrescription)).all() == []
+
+
+def test_start_workout_session_sets_started_at(db_session):
+    _, week = _make_week(db_session)
+    workout_session = make_workout_session(week_id=week.id)
+    _persist(db_session, workout_session)
+
+    started = workout_sessions_repo.start_workout_session(db_session, workout_session)
+
+    assert started.started_at is not None
+
+
+def test_start_workout_session_is_idempotent_and_keeps_original_timestamp(db_session):
+    _, week = _make_week(db_session)
+    workout_session = make_workout_session(week_id=week.id)
+    _persist(db_session, workout_session)
+    first_start = workout_sessions_repo.start_workout_session(
+        db_session, workout_session
+    )
+    original_started_at = first_start.started_at
+
+    restarted = workout_sessions_repo.start_workout_session(db_session, workout_session)
+
+    assert restarted.started_at == original_started_at
+
+
+def test_complete_workout_session_sets_completed_at(db_session):
+    _, week = _make_week(db_session)
+    workout_session = make_workout_session(week_id=week.id)
+    _persist(db_session, workout_session)
+
+    completed = workout_sessions_repo.complete_workout_session(
+        db_session, workout_session
+    )
+
+    assert completed.completed_at is not None
+
+
+def test_complete_workout_session_is_idempotent_and_keeps_original_timestamp(
+    db_session,
+):
+    _, week = _make_week(db_session)
+    workout_session = make_workout_session(week_id=week.id)
+    _persist(db_session, workout_session)
+    first_complete = workout_sessions_repo.complete_workout_session(
+        db_session, workout_session
+    )
+    original_completed_at = first_complete.completed_at
+
+    recompleted = workout_sessions_repo.complete_workout_session(
+        db_session, workout_session
+    )
+
+    assert recompleted.completed_at == original_completed_at

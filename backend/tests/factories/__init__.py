@@ -1,5 +1,6 @@
 from tests.factories.factories import (
     make_exercise,
+    make_exercise_performance,
     make_exercise_prescription,
     make_profile,
     make_program,
@@ -9,6 +10,7 @@ from tests.factories.factories import (
 
 __all__ = [
     "make_exercise",
+    "make_exercise_performance",
     "make_exercise_prescription",
     "make_profile",
     "make_program",
