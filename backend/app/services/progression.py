@@ -155,6 +155,11 @@ def _count_consecutive_failures(prior_attempts: list[AttemptOutcome]) -> int:
     distinct from an *excluded* attempt (zero performances logged at all, filtered out
     by `build_attempt_history` before this ever runs) — a `None`-weight attempt here
     was genuinely performed and failed, just with no weight on record.
+
+    `newer_weight` carries the last *known* weight forward rather than being
+    overwritten to `None` on an unweighted attempt — otherwise a bodyweight-logged
+    attempt sitting between two weighted ones would blind the decrease check to a
+    real deload boundary one step further back.
     """
     count = 0
     newer_weight: float | None = None
@@ -170,7 +175,8 @@ def _count_consecutive_failures(prior_attempts: list[AttemptOutcome]) -> int:
             # a deload boundary. Stop before crossing it.
             break
         count += 1
-        newer_weight = attempt.weight
+        if attempt.weight is not None:
+            newer_weight = attempt.weight
     return count
 
 

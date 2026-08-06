@@ -208,6 +208,28 @@ class TestDeload:
         assert result.consecutive_failures == 2
         assert result.action == "hold"
 
+    def test_unweighted_attempt_does_not_mask_a_decrease_further_back(self):
+        # Newest-first: a post-deload failure, then an unweighted (e.g. bodyweight-
+        # logged) failure with no weight on record, then a pre-deload failure at the
+        # higher original weight. The decrease boundary is between the newest attempt
+        # and the third one — the unweighted attempt in between must not blind the
+        # walk to it by resetting the "last known weight" reference to None.
+        deloaded_weight = CURRENT_WEIGHT * (1 - DELOAD_PERCENTAGE)
+        prior_attempts = [
+            _failure(weight=deloaded_weight),
+            _failure(weight=None),
+            _failure(weight=CURRENT_WEIGHT),
+        ]
+
+        result = calculate_recommendation(
+            target_weight=TARGET_WEIGHT,
+            prior_attempts=prior_attempts,
+            settings=_settings(),
+        )
+
+        assert result.consecutive_failures == 2
+        assert result.action == "hold"
+
     def test_success_resets_failure_count_to_zero(self):
         # Newest-first: the most recent attempt succeeded, so failures from
         # further back must not be counted at all.
