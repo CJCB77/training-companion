@@ -54,6 +54,20 @@ def get_exercise(session: Session, exercise_id: int) -> Exercise | None:
     return session.get(Exercise, exercise_id)
 
 
+def get_visible_exercise(
+    session: Session, *, user_id: int, exercise_id: int
+) -> Exercise | None:
+    """The exercise by id, but only if visible to `user_id` (system exercise or
+    the caller's own custom one) — used to validate an `exercise_id` referenced
+    from another entity (e.g. ExercisePrescription) without leaking the existence
+    of another user's custom exercises.
+    """
+    statement = select(Exercise).where(
+        Exercise.id == exercise_id, _visible_to_user(user_id)
+    )
+    return session.exec(statement).first()
+
+
 def create_exercise(
     session: Session,
     *,

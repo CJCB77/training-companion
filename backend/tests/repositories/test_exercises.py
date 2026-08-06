@@ -120,6 +120,36 @@ def test_find_visible_exercise_by_name_does_not_match_another_users_custom(db_se
     assert found is None
 
 
+def test_get_visible_exercise_returns_a_system_exercise_for_any_user(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    system_exercise = make_exercise(name="Seated Cable Row", created_by_user_id=None)
+    _persist(db_session, system_exercise)
+
+    found = exercises_repo.get_visible_exercise(
+        db_session, user_id=user.id, exercise_id=system_exercise.id
+    )
+
+    assert found is not None
+    assert found.id == system_exercise.id
+
+
+def test_get_visible_exercise_returns_none_for_another_users_custom_exercise(
+    db_session,
+):
+    user = make_profile()
+    other = make_profile()
+    _persist(db_session, user, other)
+    theirs = make_exercise(name="Their Curl", created_by_user_id=other.id)
+    _persist(db_session, theirs)
+
+    found = exercises_repo.get_visible_exercise(
+        db_session, user_id=user.id, exercise_id=theirs.id
+    )
+
+    assert found is None
+
+
 def test_create_exercise_persists_custom(db_session):
     user = make_profile()
     _persist(db_session, user)
