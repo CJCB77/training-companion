@@ -373,7 +373,9 @@ def resolve_settings(
         or ProgressionType.MANUAL
     )
 
-    increment = _resolve_number(prescription_params, program_params, "increment", minimum=0)
+    increment = _resolve_number(
+        prescription_params, program_params, "increment", minimum=0
+    )
     percentage = _resolve_number(
         prescription_params,
         program_params,

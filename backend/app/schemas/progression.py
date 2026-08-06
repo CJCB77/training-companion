@@ -68,7 +68,9 @@ class ProgressionSettings(BaseModel):
 class RecommendationRead(BaseModel):
     recommended_weight: float | None
     current_weight: float | None
-    action: Literal["increase", "hold", "deload", "manual", "no_data", "needs_configuration"]
+    action: Literal[
+        "increase", "hold", "deload", "manual", "no_data", "needs_configuration"
+    ]
     progression_type: ProgressionType
     consecutive_failures: int
     reason: str
