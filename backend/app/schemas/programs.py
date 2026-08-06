@@ -3,6 +3,7 @@ from datetime import date, datetime
 from pydantic import BaseModel
 
 from app.models.enums import ProgressionType, WeightUnit
+from app.schemas.progression import ProgressionParams
 
 
 class ProgramCreate(BaseModel):
@@ -13,7 +14,7 @@ class ProgramCreate(BaseModel):
     is_active: bool = False
     weight_unit: WeightUnit = WeightUnit.KG
     default_progression_type: ProgressionType | None = None
-    default_progression_params: dict | None = None
+    default_progression_params: ProgressionParams | None = None
 
 
 class ProgramUpdate(BaseModel):
@@ -26,7 +27,7 @@ class ProgramUpdate(BaseModel):
     is_active: bool | None = None
     weight_unit: WeightUnit | None = None
     default_progression_type: ProgressionType | None = None
-    default_progression_params: dict | None = None
+    default_progression_params: ProgressionParams | None = None
 
 
 class ProgramRead(BaseModel):

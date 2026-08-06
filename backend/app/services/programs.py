@@ -35,7 +35,13 @@ def create_program_for_user(
         end_date=payload.end_date,
         is_active=payload.is_active,
         default_progression_type=payload.default_progression_type,
-        default_progression_params=payload.default_progression_params,
+        # SQLModel won't serialize a ProgressionParams instance into the JSONB
+        # column — dump it to a plain dict first.
+        default_progression_params=(
+            payload.default_progression_params.model_dump(exclude_unset=True)
+            if payload.default_progression_params is not None
+            else None
+        ),
     )
 
 

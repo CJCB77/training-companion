@@ -124,7 +124,13 @@ def create_exercise_prescription_for_session(
         target_weight=payload.target_weight,
         target_rpe=payload.target_rpe,
         progression_type=payload.progression_type,
-        progression_params=payload.progression_params,
+        # SQLModel won't serialize a ProgressionParams instance into the JSONB
+        # column — dump it to a plain dict first.
+        progression_params=(
+            payload.progression_params.model_dump(exclude_unset=True)
+            if payload.progression_params is not None
+            else None
+        ),
         notes=payload.notes,
     )
 
