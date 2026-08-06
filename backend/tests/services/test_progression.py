@@ -7,6 +7,7 @@ from app.models.enums import ProgressionType, SetCompletionState, WeightUnit
 from app.schemas.progression import DeloadSettings, ProgressionSettings
 from app.services.progression import (
     AttemptOutcome,
+    build_attempt_history,
     calculate_recommendation,
     evaluate_attempt,
     resolve_settings,
@@ -314,7 +315,13 @@ class TestEvaluateAttempt:
 
         assert outcome.successful is False
 
-    def test_zero_logged_performances_is_a_failure_with_no_weight(self):
+    def test_zero_logged_performances_evaluates_as_unsuccessful_in_isolation(self):
+        # evaluate_attempt itself has no concept of "unattempted" — asked in
+        # isolation whether zero sets satisfy "all target_sets sets logged", the
+        # honest answer is no. The engine-level rule ("an unperformed session must
+        # never push an athlete toward a deload") lives one layer up, in
+        # build_attempt_history, which excludes empty-performance rows before they
+        # ever reach this function — see TestBuildAttemptHistory below.
         outcome = evaluate_attempt(target_sets=2, target_reps=5, performances=[])
 
         assert outcome.successful is False
@@ -331,6 +338,78 @@ class _FakePerformance:
         self.actual_reps = actual_reps
         self.actual_weight = actual_weight
         self.completion_state = completion_state
+
+
+class _FakePrescription:
+    """Minimal stand-in for `ExercisePrescription` — `build_attempt_history` only
+    reads `target_sets`/`target_reps`, so a full ORM instance isn't needed.
+    """
+
+    def __init__(self, *, target_sets, target_reps):
+        self.target_sets = target_sets
+        self.target_reps = target_reps
+
+
+class TestBuildAttemptHistory:
+    """Covers the critical rule that a prescription with zero logged performances
+    (a genuinely skipped exercise within an otherwise-completed session) must be
+    excluded from history entirely — not scored as a failure.
+    """
+
+    def _completed(self, actual_reps: int = 5, weight: float = CURRENT_WEIGHT):
+        return _FakePerformance(
+            set_number=1,
+            actual_reps=actual_reps,
+            actual_weight=weight,
+            completion_state=SetCompletionState.COMPLETED,
+        )
+
+    def test_row_with_zero_performances_is_excluded_not_counted_as_failure(self):
+        skipped_row = (_FakePrescription(target_sets=2, target_reps=5), [])
+        logged_row = (
+            _FakePrescription(target_sets=1, target_reps=5),
+            [self._completed()],
+        )
+
+        history = build_attempt_history([skipped_row, logged_row])
+
+        assert len(history) == 1
+        assert history[0].successful is True
+
+    def test_all_rows_skipped_returns_empty_history(self):
+        history = build_attempt_history(
+            [
+                (_FakePrescription(target_sets=2, target_reps=5), []),
+                (_FakePrescription(target_sets=2, target_reps=5), []),
+            ]
+        )
+
+        assert history == []
+
+    def test_skipped_exercise_does_not_push_toward_deload(self):
+        # A skipped attempt sandwiched in otherwise-failing history must not be
+        # scored as an additional failure — only the two genuinely failed logged
+        # attempts should count.
+        failed = self._completed(actual_reps=1)  # below target_reps -> failure
+        rows = [
+            (_FakePrescription(target_sets=1, target_reps=5), [failed]),
+            (_FakePrescription(target_sets=1, target_reps=5), []),  # skipped
+            (_FakePrescription(target_sets=1, target_reps=5), [failed]),
+        ]
+
+        history = build_attempt_history(rows)
+        settings = _settings(
+            deload=DeloadSettings(
+                enabled=True, failure_threshold=FAILURE_THRESHOLD, percentage=0.10
+            )
+        )
+        result = calculate_recommendation(
+            target_weight=TARGET_WEIGHT, prior_attempts=history, settings=settings
+        )
+
+        assert len(history) == 2
+        assert result.consecutive_failures == 2
+        assert result.action == "hold"
 
 
 class _FakeSettingsContainer:
@@ -359,6 +438,29 @@ class TestResolveSettings:
 
         assert settings.increment == 5.0
         assert settings.percentage == 0.03
+
+    def test_non_dict_progression_params_container_falls_back_without_raising(self):
+        # The stored JSONB itself can be malformed at the container level, not
+        # just at individual keys inside a dict — a legacy row could hold a list,
+        # string, or number instead of an object entirely.
+        prescription = _FakeSettingsContainer(
+            progression_type=ProgressionType.FIXED_INCREMENT,
+            progression_params=["not", "a", "dict"],
+        )
+        program = _FakeSettingsContainer(
+            default_progression_type=None,
+            default_progression_params="also not a dict",
+            weight_unit=WeightUnit.KG,
+        )
+
+        settings = resolve_settings(prescription=prescription, program=program)
+
+        assert settings.increment is None
+        assert settings.percentage is None
+        assert settings.deload.enabled is True
+        assert settings.deload.failure_threshold == FAILURE_THRESHOLD
+        assert settings.deload.percentage == DELOAD_PERCENTAGE
+        assert settings.rounding_increment == 2.5
 
     def test_malformed_stored_config_falls_back_to_defaults_without_raising(self):
         prescription = _FakeSettingsContainer(

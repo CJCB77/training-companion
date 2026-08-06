@@ -97,6 +97,12 @@ def evaluate_attempt(
     """Strict success rule: all `target_sets` sets logged, every set `completed`,
     every set's `actual_reps >= target_reps`. Anything less — including `skipped`
     sets, or fewer sets logged than prescribed — fails. Pure: no DB, no I/O.
+
+    Note: called with an empty `performances` list, this correctly reports
+    `successful=False` (zero sets logged never satisfies "all target_sets sets
+    logged"). But a prescription with *no* logged performances at all is not a
+    failed attempt, it's an unattempted one — see `build_attempt_history`, which
+    excludes such rows before they ever reach the consecutive-failure walk.
     """
     successful = (
         len(performances) >= target_sets
@@ -110,6 +116,31 @@ def evaluate_attempt(
     )
 
 
+def build_attempt_history(
+    prior_rows: list[tuple[ExercisePrescription, list[ExercisePerformance]]],
+) -> list[AttemptOutcome]:
+    """Turns raw (prescription, performances) rows — as returned by
+    `exercise_prescriptions_repo.list_prior_attempts`, newest-first — into ordered
+    `AttemptOutcome`s, **excluding any row where nothing was logged at all**.
+
+    A prescription that belongs to a completed session but has zero logged
+    performances means that specific exercise was skipped, not attempted and
+    failed. Per the design plan: "Zero logged performances is `no_data`, not a
+    failure — an unperformed session must never push an athlete toward a deload."
+    Counting it as a failure would do exactly that, so it's dropped from history
+    entirely rather than passed to `evaluate_attempt`. Pure: no DB, no I/O.
+    """
+    return [
+        evaluate_attempt(
+            target_sets=prescription.target_sets,
+            target_reps=prescription.target_reps,
+            performances=performances,
+        )
+        for prescription, performances in prior_rows
+        if performances
+    ]
+
+
 def _count_consecutive_failures(prior_attempts: list[AttemptOutcome]) -> int:
     """Walk newest-first, counting failures back to either the last success or the
     last observed weight decrease, whichever comes first.
@@ -117,6 +148,13 @@ def _count_consecutive_failures(prior_attempts: list[AttemptOutcome]) -> int:
     The weight-decrease condition stands in for "reset the failure counter": a deload
     the athlete actually took shows up as a lower logged weight on the next attempt.
     Without this, a deload actually taken would be re-recommended forever.
+
+    A `None` weight (no `actual_weight` logged, e.g. bodyweight work) simply disables
+    the decrease check for that step without breaking the walk — the attempt is still
+    counted as a failure, just without contributing to reset detection. This is
+    distinct from an *excluded* attempt (zero performances logged at all, filtered out
+    by `build_attempt_history` before this ever runs) — a `None`-weight attempt here
+    was genuinely performed and failed, just with no weight on record.
     """
     count = 0
     newer_weight: float | None = None
@@ -362,10 +400,21 @@ def resolve_settings(
 
     Tolerant by construction: every value is extracted defensively via `_extract_*`
     before this ever builds a `ProgressionSettings`, so a malformed stored row can
-    never raise here — it just falls back to the next level down.
+    never raise here — it just falls back to the next level down. The stored JSONB
+    itself might not even be a dict (a legacy row could hold a list, string, or
+    number) — guard that here too, since `_resolve_deload` calls `.get("deload")`
+    on whatever comes out of this.
     """
-    prescription_params = prescription.progression_params or {}
-    program_params = program.default_progression_params or {}
+    prescription_params = (
+        prescription.progression_params
+        if isinstance(prescription.progression_params, dict)
+        else {}
+    )
+    program_params = (
+        program.default_progression_params
+        if isinstance(program.default_progression_params, dict)
+        else {}
+    )
 
     progression_type = (
         prescription.progression_type
@@ -389,11 +438,11 @@ def resolve_settings(
         if program.weight_unit == WeightUnit.KG
         else _DEFAULT_ROUNDING_INCREMENT_LB
     )
+    resolved_rounding = _resolve_number(
+        prescription_params, program_params, "rounding_increment", exclusive_min=0
+    )
     rounding_increment = (
-        _resolve_number(
-            prescription_params, program_params, "rounding_increment", exclusive_min=0
-        )
-        or default_rounding
+        resolved_rounding if resolved_rounding is not None else default_rounding
     )
 
     deload = _resolve_deload(prescription_params, program_params)
@@ -416,9 +465,11 @@ def get_recommendation_for_prescription(
     prescription = exercise_prescriptions_service.get_owned_exercise_prescription(
         session, user_id=user_id, prescription_id=prescription_id
     )
-    # Traversed via the already-loaded relationship chain (prescription ->
-    # workout_session -> week -> program), same join chain the ownership check just
-    # used underneath — no separate query needed.
+    # Traversed via lazy-loaded relationships (prescription -> workout_session ->
+    # week -> program). The ownership check above only selected Program.user_id as a
+    # scalar, not the entity, so this does emit its own SELECTs — acceptable here
+    # since a single recommendation call is a handful of small, indexed lookups, not
+    # a hot path in a loop.
     program = prescription.workout_session.week.program
 
     settings = resolve_settings(prescription=prescription, program=program)
@@ -430,14 +481,7 @@ def get_recommendation_for_prescription(
         exercise_id=prescription.exercise_id,
         limit=history_limit,
     )
-    prior_attempts = [
-        evaluate_attempt(
-            target_sets=prior_prescription.target_sets,
-            target_reps=prior_prescription.target_reps,
-            performances=performances,
-        )
-        for prior_prescription, performances in prior_rows
-    ]
+    prior_attempts = build_attempt_history(prior_rows)
 
     result = calculate_recommendation(
         target_weight=prescription.target_weight,
