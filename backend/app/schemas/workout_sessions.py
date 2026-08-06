@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -18,6 +19,7 @@ class WorkoutSessionUpdate(BaseModel):
 
     day_name: str | None = None
     order_index: int | None = Field(default=None, ge=0)
+    notes: str | None = None
 
 
 class WorkoutSessionRead(BaseModel):
@@ -35,7 +37,7 @@ class WorkoutSessionRead(BaseModel):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def status(self) -> str:
+    def status(self) -> Literal["not_started", "in_progress", "completed"]:
         """Derived from started_at/completed_at, never stored: not_started,
         in_progress, or completed.
         """
