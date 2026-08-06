@@ -10,6 +10,7 @@ from app.models.timestamps import created_at_column, updated_at_column
 
 if TYPE_CHECKING:
     from app.models.exercise import Exercise
+    from app.models.exercise_performance import ExercisePerformance
     from app.models.workout_session import WorkoutSession
 
 
@@ -59,3 +60,7 @@ class ExercisePrescription(SQLModel, table=True):
 
     workout_session: "WorkoutSession" = Relationship(back_populates="prescriptions")
     exercise: "Exercise" = Relationship(back_populates="prescriptions")
+    performances: list["ExercisePerformance"] = Relationship(
+        back_populates="prescription",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )

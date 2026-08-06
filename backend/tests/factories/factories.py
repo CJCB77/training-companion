@@ -14,9 +14,11 @@ from app.models.enums import (
     ExerciseCategory,
     MuscleGroup,
     ProgressionType,
+    SetCompletionState,
     WeightUnit,
 )
 from app.models.exercise import Exercise
+from app.models.exercise_performance import ExercisePerformance
 from app.models.exercise_prescription import ExercisePrescription
 from app.models.profile import Profile
 from app.models.program import Program
@@ -96,3 +98,18 @@ def make_exercise_prescription(
     }
     data.update(overrides)
     return ExercisePrescription(**data)
+
+
+def make_exercise_performance(
+    *, prescription_id: int, **overrides
+) -> ExercisePerformance:
+    data = {
+        "prescription_id": prescription_id,
+        "set_number": 1,
+        "actual_reps": 5,
+        "actual_weight": 100.0,
+        "actual_rpe": 8.0,
+        "completion_state": SetCompletionState.COMPLETED,
+    }
+    data.update(overrides)
+    return ExercisePerformance(**data)

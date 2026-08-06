@@ -2,6 +2,7 @@ import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.exercise_performances import router as exercise_performances_router
 from app.api.exercise_prescriptions import router as exercise_prescriptions_router
 from app.api.exercises import router as exercises_router
 from app.api.health import router as health_router
@@ -43,5 +44,6 @@ app.include_router(exercises_router)
 app.include_router(training_weeks_router)
 app.include_router(workout_sessions_router)
 app.include_router(exercise_prescriptions_router)
+app.include_router(exercise_performances_router)
 
 register_error_handlers(app)

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlmodel import Session, select
@@ -63,7 +64,7 @@ def get_max_order_index(session: Session, week_id: int) -> int | None:
 # Fields callers are allowed to change via update_workout_session. An explicit
 # allow-list keeps id/week_id from being mass-assigned, same as
 # programs_repo.update_program.
-_UPDATABLE_FIELDS = {"day_name", "order_index"}
+_UPDATABLE_FIELDS = {"day_name", "order_index", "notes"}
 
 
 def update_workout_session(
@@ -86,3 +87,36 @@ def delete_workout_session(session: Session, workout_session: WorkoutSession) ->
     """
     session.delete(workout_session)
     session.commit()
+
+
+def start_workout_session(
+    session: Session, workout_session: WorkoutSession
+) -> WorkoutSession:
+    """Mark a session in-progress. Idempotent: if already started, the existing
+    started_at timestamp is left alone so "when was this started" stays stable.
+    """
+    if workout_session.started_at is None:
+        workout_session.started_at = datetime.now(timezone.utc)
+    session.add(workout_session)
+    session.commit()
+    session.refresh(workout_session)
+    return workout_session
+
+
+def complete_workout_session(
+    session: Session, workout_session: WorkoutSession
+) -> WorkoutSession:
+    """Mark a session complete. Idempotent: if already completed, the existing
+    completed_at timestamp is left alone. Backfills started_at too if the
+    session is being completed without ever having been started, so status
+    can't read "completed" with a NULL started_at.
+    """
+    now = datetime.now(timezone.utc)
+    if workout_session.started_at is None:
+        workout_session.started_at = now
+    if workout_session.completed_at is None:
+        workout_session.completed_at = now
+    session.add(workout_session)
+    session.commit()
+    session.refresh(workout_session)
+    return workout_session

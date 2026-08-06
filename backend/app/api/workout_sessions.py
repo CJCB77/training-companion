@@ -129,3 +129,39 @@ def delete_workout_session(
         workout_sessions_service.WorkoutSessionAccessDeniedError,
     ) as exc:
         raise _session_not_found() from exc
+
+
+@router.post("/workout-sessions/{session_id}/start", response_model=WorkoutSessionRead)
+def start_workout_session(
+    session_id: int,
+    current_user: Profile = Depends(get_current_user),
+    db_session: Session = Depends(get_session),
+) -> WorkoutSessionRead:
+    try:
+        return workout_sessions_service.start_workout_session(
+            db_session, user_id=current_user.id, workout_session_id=session_id
+        )
+    except (
+        workout_sessions_service.WorkoutSessionNotFoundError,
+        workout_sessions_service.WorkoutSessionAccessDeniedError,
+    ) as exc:
+        raise _session_not_found() from exc
+
+
+@router.post(
+    "/workout-sessions/{session_id}/complete", response_model=WorkoutSessionRead
+)
+def complete_workout_session(
+    session_id: int,
+    current_user: Profile = Depends(get_current_user),
+    db_session: Session = Depends(get_session),
+) -> WorkoutSessionRead:
+    try:
+        return workout_sessions_service.complete_workout_session(
+            db_session, user_id=current_user.id, workout_session_id=session_id
+        )
+    except (
+        workout_sessions_service.WorkoutSessionNotFoundError,
+        workout_sessions_service.WorkoutSessionAccessDeniedError,
+    ) as exc:
+        raise _session_not_found() from exc
