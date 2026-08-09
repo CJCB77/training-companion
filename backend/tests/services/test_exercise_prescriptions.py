@@ -479,11 +479,6 @@ def test_update_exercise_prescription_changing_exercise_id_revalidates_visibilit
         visible_mock,
     )
     monkeypatch.setattr(
-        exercise_prescriptions_service.exercise_prescriptions_repo,
-        "update_exercise_prescription",
-        MagicMock(side_effect=lambda session, rx, **fields: rx),
-    )
-    monkeypatch.setattr(
         exercise_prescriptions_service.progression_lines_repo,
         "get_progression_line",
         lambda *a, **k: default_line,
@@ -500,7 +495,7 @@ def test_update_exercise_prescription_changing_exercise_id_revalidates_visibilit
     )
     monkeypatch.setattr(
         exercise_prescriptions_service.exercise_prescriptions_repo,
-        "update_exercise_prescription_progression_line",
+        "update_exercise_prescription_with_progression_line",
         MagicMock(side_effect=lambda session, rx, **fields: rx),
     )
 
@@ -536,11 +531,6 @@ def test_update_exercise_prescription_changing_exercise_id_on_default_line_reres
         lambda *a, **k: new_exercise,
     )
     monkeypatch.setattr(
-        exercise_prescriptions_service.exercise_prescriptions_repo,
-        "update_exercise_prescription",
-        MagicMock(side_effect=lambda session, rx, **fields: rx),
-    )
-    monkeypatch.setattr(
         exercise_prescriptions_service.progression_lines_repo,
         "get_progression_line",
         lambda *a, **k: default_line,
@@ -558,7 +548,7 @@ def test_update_exercise_prescription_changing_exercise_id_on_default_line_reres
     move_mock = MagicMock(side_effect=lambda session, rx, **fields: rx)
     monkeypatch.setattr(
         exercise_prescriptions_service.exercise_prescriptions_repo,
-        "update_exercise_prescription_progression_line",
+        "update_exercise_prescription_with_progression_line",
         move_mock,
     )
 
@@ -569,8 +559,13 @@ def test_update_exercise_prescription_changing_exercise_id_on_default_line_reres
         payload=ExercisePrescriptionUpdate(exercise_id=new_exercise_id),
     )
 
+    # Single-commit write: both the new exercise_id and the re-resolved default
+    # line's id must land in the same update_exercise_prescription_with_
+    # progression_line call — see that function's docstring for why two separate
+    # commits would leave a corruptible window.
     _, called_kwargs = move_mock.call_args
     assert called_kwargs["progression_line_id"] == new_default_line.id
+    assert called_kwargs["exercise_id"] == new_exercise_id
 
 
 def test_update_exercise_prescription_changing_exercise_id_on_explicit_line_raises_invalid_update(
@@ -890,6 +885,27 @@ class TestResolveProgressionLineForNewPrescription:
         )
 
         assert line is explicit_line
+
+    def test_progression_line_id_that_does_not_exist_raises_invalid_reference(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            exercise_prescriptions_service.progression_lines_repo,
+            "get_progression_line",
+            lambda *a, **k: None,
+        )
+
+        with pytest.raises(
+            exercise_prescriptions_service.InvalidProgressionLineReferenceError
+        ):
+            exercise_prescriptions_service.resolve_progression_line_for_new_prescription(
+                MagicMock(),
+                program_id=PROGRAM_ID,
+                exercise_id=EXERCISE_ID,
+                progression_line_id=OTHER_PROGRESSION_LINE_ID,
+                start_new_progression_line_label=None,
+                starting_new_line=False,
+            )
 
     def test_progression_line_id_from_a_different_program_raises_invalid_reference(
         self, monkeypatch

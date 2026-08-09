@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.models.enums import ProgressionType
+from app.schemas.progression_lines import ProgressionLineUpdate
 from app.services import progression as progression_service
 from app.services import progression_lines as progression_lines_service
 from tests.factories import (
@@ -187,7 +188,10 @@ def test_renaming_a_lines_label_does_not_change_its_recommendation(db_session):
         db_session, user_id=user.id, prescription_id=current.id
     )
     progression_lines_service.rename_progression_line(
-        db_session, user_id=user.id, line_id=line.id, label="Renamed Squats"
+        db_session,
+        user_id=user.id,
+        line_id=line.id,
+        payload=ProgressionLineUpdate(label="Renamed Squats"),
     )
     after_rename = progression_service.get_recommendation_for_prescription(
         db_session, user_id=user.id, prescription_id=current.id
