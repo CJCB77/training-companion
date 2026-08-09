@@ -4,6 +4,7 @@ from sqlmodel import select
 from app.models.enums import WeightUnit
 from app.models.exercise import Exercise
 from app.models.exercise_prescription import ExercisePrescription
+from app.models.progression_line import ProgressionLine
 from app.models.training_week import TrainingWeek
 from app.models.workout_session import WorkoutSession
 from app.repositories import programs as programs_repo
@@ -12,6 +13,7 @@ from tests.factories import (
     make_exercise_prescription,
     make_profile,
     make_program,
+    make_progression_line,
     make_training_week,
     make_workout_session,
 )
@@ -256,8 +258,12 @@ def test_delete_program_cascades_to_full_tree_but_leaves_exercise_untouched(
     _persist(db_session, week)
     session_day = make_workout_session(week_id=week.id)
     _persist(db_session, session_day)
+    line = make_progression_line(program_id=program.id, exercise_id=exercise.id)
+    _persist(db_session, line)
     rx = make_exercise_prescription(
-        workout_session_id=session_day.id, exercise_id=exercise.id
+        workout_session_id=session_day.id,
+        exercise_id=exercise.id,
+        progression_line_id=line.id,
     )
     _persist(db_session, rx)
 
@@ -271,4 +277,38 @@ def test_delete_program_cascades_to_full_tree_but_leaves_exercise_untouched(
     # ondelete="RESTRICT" and no cascading relationship, since Exercise is an
     # independent entity never owned by a Program (see CLAUDE.md's Entity Lifecycle
     # Conventions).
+    assert db_session.get(Exercise, exercise.id) is not None
+
+
+def test_delete_program_with_progression_lines_succeeds(db_session):
+    """Regression test flagged during design: ProgressionLine deliberately has no
+    ORM Relationship to Program/ExercisePrescription (see
+    app/models/progression_line.py), so `session.delete(program)` must still
+    succeed — SQLAlchemy's unit-of-work never learns about the line, and it's the
+    DB-level cascade (program -> ... -> prescription deleted first, only then the
+    FK cascade removes the now-unreferenced line) that has to make this work.
+    """
+    user = make_profile()
+    exercise = make_exercise(created_by_user_id=user.id)
+    _persist(db_session, user, exercise)
+
+    program = make_program(user_id=user.id)
+    _persist(db_session, program)
+    week = make_training_week(program_id=program.id)
+    _persist(db_session, week)
+    session_day = make_workout_session(week_id=week.id)
+    _persist(db_session, session_day)
+    line = make_progression_line(program_id=program.id, exercise_id=exercise.id)
+    _persist(db_session, line)
+    rx = make_exercise_prescription(
+        workout_session_id=session_day.id,
+        exercise_id=exercise.id,
+        progression_line_id=line.id,
+    )
+    _persist(db_session, rx)
+
+    programs_repo.delete_program(db_session, program)
+
+    assert db_session.exec(select(ExercisePrescription)).all() == []
+    assert db_session.exec(select(ProgressionLine)).all() == []
     assert db_session.get(Exercise, exercise.id) is not None

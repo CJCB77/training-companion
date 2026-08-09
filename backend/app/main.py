@@ -9,6 +9,7 @@ from app.api.health import router as health_router
 from app.api.profile import router as profile_router
 from app.api.programs import router as programs_router
 from app.api.progression import router as progression_router
+from app.api.progression_lines import router as progression_lines_router
 from app.api.training_weeks import router as training_weeks_router
 from app.api.workout_sessions import router as workout_sessions_router
 from app.core.config import settings
@@ -47,5 +48,6 @@ app.include_router(workout_sessions_router)
 app.include_router(exercise_prescriptions_router)
 app.include_router(exercise_performances_router)
 app.include_router(progression_router)
+app.include_router(progression_lines_router)
 
 register_error_handlers(app)

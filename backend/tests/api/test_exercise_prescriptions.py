@@ -24,6 +24,7 @@ from tests.factories import make_exercise_prescription, make_profile
 SESSION_ID = 7
 EXERCISE_ID = 20
 PRESCRIPTION_ID = 42
+PROGRESSION_LINE_ID = 99
 
 
 def _fake_session():
@@ -49,9 +50,13 @@ def authenticated_client(current_user):
 
 
 def _prescription_read_double(**overrides) -> object:
-    prescription = make_exercise_prescription(
-        workout_session_id=SESSION_ID, exercise_id=EXERCISE_ID, **overrides
-    )
+    data = {
+        "workout_session_id": SESSION_ID,
+        "exercise_id": EXERCISE_ID,
+        "progression_line_id": PROGRESSION_LINE_ID,
+    }
+    data.update(overrides)
+    prescription = make_exercise_prescription(**data)
     prescription.id = PRESCRIPTION_ID
     prescription.created_at = datetime.now(timezone.utc)
     prescription.updated_at = datetime.now(timezone.utc)
@@ -336,6 +341,109 @@ def test_update_exercise_prescription_with_invalid_deload_percentage_returns_422
 
     response = authenticated_client.put(
         f"/exercise-prescriptions/{PRESCRIPTION_ID}", json=payload
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_exercise_prescription_with_no_progression_line_fields_passes_them_through(
+    authenticated_client, monkeypatch
+):
+    created = _prescription_read_double()
+    create_mock = MagicMock(return_value=created)
+    monkeypatch.setattr(
+        exercise_prescriptions_service,
+        "create_exercise_prescription_for_session",
+        create_mock,
+    )
+
+    response = authenticated_client.post(
+        f"/workout-sessions/{SESSION_ID}/exercise-prescriptions",
+        json=_create_payload(),
+    )
+
+    assert response.status_code == 201
+    payload = create_mock.call_args.kwargs["payload"]
+    assert payload.progression_line_id is None
+    assert payload.start_new_progression_line is None
+
+
+def test_create_exercise_prescription_with_existing_progression_line_id_passes_it_through(
+    authenticated_client, monkeypatch
+):
+    created = _prescription_read_double()
+    create_mock = MagicMock(return_value=created)
+    monkeypatch.setattr(
+        exercise_prescriptions_service,
+        "create_exercise_prescription_for_session",
+        create_mock,
+    )
+
+    response = authenticated_client.post(
+        f"/workout-sessions/{SESSION_ID}/exercise-prescriptions",
+        json=_create_payload(progression_line_id=PROGRESSION_LINE_ID),
+    )
+
+    assert response.status_code == 201
+    payload = create_mock.call_args.kwargs["payload"]
+    assert payload.progression_line_id == PROGRESSION_LINE_ID
+    assert payload.start_new_progression_line is None
+
+
+def test_create_exercise_prescription_with_start_new_progression_line_passes_it_through(
+    authenticated_client, monkeypatch
+):
+    created = _prescription_read_double()
+    create_mock = MagicMock(return_value=created)
+    monkeypatch.setattr(
+        exercise_prescriptions_service,
+        "create_exercise_prescription_for_session",
+        create_mock,
+    )
+
+    response = authenticated_client.post(
+        f"/workout-sessions/{SESSION_ID}/exercise-prescriptions",
+        json=_create_payload(start_new_progression_line={"label": "Light"}),
+    )
+
+    assert response.status_code == 201
+    payload = create_mock.call_args.kwargs["payload"]
+    assert payload.progression_line_id is None
+    assert payload.start_new_progression_line.label == "Light"
+
+
+def test_create_exercise_prescription_with_both_progression_line_fields_returns_422(
+    authenticated_client,
+):
+    payload = _create_payload(
+        progression_line_id=PROGRESSION_LINE_ID,
+        start_new_progression_line={"label": "Light"},
+    )
+
+    response = authenticated_client.post(
+        f"/workout-sessions/{SESSION_ID}/exercise-prescriptions", json=payload
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_exercise_prescription_with_invalid_progression_line_reference_returns_422(
+    authenticated_client, monkeypatch
+):
+    def _raise(*args, **kwargs):
+        raise exercise_prescriptions_service.InvalidProgressionLineReferenceError(
+            PROGRESSION_LINE_ID
+        )
+
+    monkeypatch.setattr(
+        exercise_prescriptions_service,
+        "create_exercise_prescription_for_session",
+        _raise,
+    )
+
+    response = authenticated_client.post(
+        f"/workout-sessions/{SESSION_ID}/exercise-prescriptions",
+        json=_create_payload(progression_line_id=PROGRESSION_LINE_ID),
     )
 
     assert response.status_code == 422

@@ -36,6 +36,20 @@ class ExercisePrescription(SQLModel, table=True):
             nullable=False,
         )
     )
+    # Every prescription belongs to exactly one ProgressionLine — eagerly
+    # materialized, NOT NULL. No relationship declared toward ProgressionLine; see
+    # app/models/progression_line.py for why. RESTRICT: a line with prescriptions
+    # still on it cannot be deleted (line deletion isn't implemented anyway — see
+    # CLAUDE.md's Progression Lines non-goals for v1).
+    progression_line_id: int = Field(
+        sa_column=sa.Column(
+            sa.Integer,
+            sa.ForeignKey("progression_lines.id", ondelete="RESTRICT"),
+            index=True,
+            nullable=False,
+        )
+    )
+
     # Position of this exercise within the session.
     order_index: int
 

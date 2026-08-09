@@ -485,6 +485,7 @@ def get_recommendation_for_prescription(
         session,
         program_id=program.id,
         exercise_id=prescription.exercise_id,
+        progression_line_id=prescription.progression_line_id,
         limit=history_limit,
     )
     prior_attempts = build_attempt_history(prior_rows)

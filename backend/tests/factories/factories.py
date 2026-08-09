@@ -22,6 +22,7 @@ from app.models.exercise_performance import ExercisePerformance
 from app.models.exercise_prescription import ExercisePrescription
 from app.models.profile import Profile
 from app.models.program import Program
+from app.models.progression_line import ProgressionLine
 from app.models.training_week import TrainingWeek
 from app.models.workout_session import WorkoutSession
 
@@ -84,12 +85,26 @@ def make_workout_session(*, week_id: int, **overrides) -> WorkoutSession:
     return WorkoutSession(**data)
 
 
+def make_progression_line(
+    *, program_id: int, exercise_id: int, **overrides
+) -> ProgressionLine:
+    data = {
+        "program_id": program_id,
+        "exercise_id": exercise_id,
+        "is_default": True,
+        "label": None,
+    }
+    data.update(overrides)
+    return ProgressionLine(**data)
+
+
 def make_exercise_prescription(
-    *, workout_session_id: int, exercise_id: int, **overrides
+    *, workout_session_id: int, exercise_id: int, progression_line_id: int, **overrides
 ) -> ExercisePrescription:
     data = {
         "workout_session_id": workout_session_id,
         "exercise_id": exercise_id,
+        "progression_line_id": progression_line_id,
         "order_index": 0,
         "target_sets": 5,
         "target_reps": 5,
