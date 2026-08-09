@@ -61,6 +61,10 @@ def create_exercise_prescription(
         raise _session_not_found() from exc
     except exercise_prescriptions_service.ExerciseNotVisibleError as exc:
         raise _exercise_not_found() from exc
+    except exercise_prescriptions_service.InvalidProgressionLineReferenceError as exc:
+        raise _invalid_update(
+            "progression_line_id does not belong to this program's exercise"
+        ) from exc
 
 
 @router.get(

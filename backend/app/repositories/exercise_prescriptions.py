@@ -16,6 +16,7 @@ def create_exercise_prescription(
     *,
     workout_session_id: int,
     exercise_id: int,
+    progression_line_id: int,
     order_index: int,
     target_sets: int,
     target_reps: int,
@@ -28,6 +29,7 @@ def create_exercise_prescription(
     prescription = ExercisePrescription(
         workout_session_id=workout_session_id,
         exercise_id=exercise_id,
+        progression_line_id=progression_line_id,
         order_index=order_index,
         target_sets=target_sets,
         target_reps=target_reps,
@@ -120,6 +122,26 @@ def update_exercise_prescription(
     return prescription
 
 
+def update_exercise_prescription_progression_line(
+    session: Session, prescription: ExercisePrescription, *, progression_line_id: int
+) -> ExercisePrescription:
+    """Sets `progression_line_id` directly, bypassing `_UPDATABLE_FIELDS`.
+
+    That allow-list deliberately excludes `progression_line_id` — a user cannot
+    re-assign a prescription to a different *existing* line (a ticket non-goal).
+    This is a distinct, purpose-built path: the service's automatic re-resolution
+    to the new exercise's default line when `exercise_id` changes on a
+    default-line prescription. Mirrors `programs_repo.archive_program`/
+    `unarchive_program` setting `archived_at` directly rather than through the
+    generic `update_program`.
+    """
+    prescription.progression_line_id = progression_line_id
+    session.add(prescription)
+    session.commit()
+    session.refresh(prescription)
+    return prescription
+
+
 def delete_exercise_prescription(
     session: Session, prescription: ExercisePrescription
 ) -> None:
@@ -132,11 +154,22 @@ def list_prior_attempts(
     *,
     program_id: int,
     exercise_id: int,
+    progression_line_id: int,
     limit: int,
 ) -> list[tuple[ExercisePrescription, list[ExercisePerformance]]]:
-    """Prior prescriptions of `exercise_id` within `program_id` whose session was
+    """Prior prescriptions on `progression_line_id` (the exercise's progression line
+    within `program_id` — see CLAUDE.md's "Progression Lines") whose session was
     completed, newest first (by `WorkoutSession.completed_at`), each paired with its
     logged performances.
+
+    Every `ExercisePrescription.progression_line_id` is populated from creation
+    onward (NOT NULL) — there is no NULL-means-default convention to special-case
+    here, so plain equality is all scoping needs; `IS NOT DISTINCT FROM` is not
+    required. `program_id`/`exercise_id` are kept as extra predicates even though
+    `progression_line_id` alone already identifies the history set (a line is
+    already program- and exercise-scoped) — they cost nothing on an indexed join
+    and turn any future data inconsistency into an empty result rather than a
+    silently wrong recommendation.
 
     Two queries total, not N+1: the prescriptions (with the same prescription ->
     session -> week -> program join chain already used by
@@ -153,6 +186,7 @@ def list_prior_attempts(
         .where(
             TrainingWeek.program_id == program_id,
             ExercisePrescription.exercise_id == exercise_id,
+            ExercisePrescription.progression_line_id == progression_line_id,
             WorkoutSession.completed_at.is_not(None),  # type: ignore[union-attr]
         )
         .order_by(WorkoutSession.completed_at.desc())  # type: ignore[union-attr]
