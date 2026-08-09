@@ -280,3 +280,49 @@ def test_delete_program_access_denied_returns_404(authenticated_client, monkeypa
     response = authenticated_client.delete(f"/programs/{PROGRAM_ID}")
 
     assert response.status_code == 404
+
+
+def test_create_program_with_unknown_progression_params_key_returns_422(
+    authenticated_client,
+):
+    payload = {
+        "name": "My Strength Block",
+        "default_progression_params": {"unknown_key": 1},
+    }
+
+    response = authenticated_client.post("/programs", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_create_program_with_out_of_range_percentage_returns_422(
+    authenticated_client,
+):
+    payload = {
+        "name": "My Strength Block",
+        "default_progression_params": {"percentage": 1.5},
+    }
+
+    response = authenticated_client.post("/programs", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_update_program_with_negative_increment_returns_422(authenticated_client):
+    payload = {"default_progression_params": {"increment": -2.5}}
+
+    response = authenticated_client.put(f"/programs/{PROGRAM_ID}", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_update_program_with_invalid_deload_failure_threshold_returns_422(
+    authenticated_client,
+):
+    payload = {
+        "default_progression_params": {"deload": {"failure_threshold": 0}},
+    }
+
+    response = authenticated_client.put(f"/programs/{PROGRAM_ID}", json=payload)
+
+    assert response.status_code == 422

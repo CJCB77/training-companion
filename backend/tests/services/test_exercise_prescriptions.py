@@ -14,6 +14,7 @@ from app.schemas.exercise_prescriptions import (
     ExercisePrescriptionCreate,
     ExercisePrescriptionUpdate,
 )
+from app.schemas.progression import ProgressionParams
 from app.services import exercise_prescriptions as exercise_prescriptions_service
 from app.services import workout_sessions as workout_sessions_service
 from tests.factories import make_exercise, make_exercise_prescription
@@ -143,6 +144,48 @@ def test_create_exercise_prescription_with_visible_exercise_succeeds(monkeypatch
     )
 
     assert result is create_mock.return_value
+
+
+def test_create_exercise_prescription_dumps_progression_params_to_a_plain_dict(
+    monkeypatch,
+):
+    # The real break risk flagged in TRAIN-20's design plan: SQLModel won't
+    # serialize a ProgressionParams instance into the JSONB column, so the
+    # repository must receive a plain dict, not the Pydantic model.
+    monkeypatch.setattr(
+        workout_sessions_service, "get_owned_workout_session", MagicMock()
+    )
+    exercise = make_exercise()
+    exercise.id = EXERCISE_ID
+    monkeypatch.setattr(
+        exercise_prescriptions_service.exercises_repo,
+        "get_visible_exercise",
+        lambda *a, **k: exercise,
+    )
+    monkeypatch.setattr(
+        exercise_prescriptions_service.exercise_prescriptions_repo,
+        "get_max_order_index",
+        lambda *a, **k: None,
+    )
+    create_mock = MagicMock(return_value=_prescription())
+    monkeypatch.setattr(
+        exercise_prescriptions_service.exercise_prescriptions_repo,
+        "create_exercise_prescription",
+        create_mock,
+    )
+    payload = _create_payload(progression_params=ProgressionParams(increment=5.0))
+
+    exercise_prescriptions_service.create_exercise_prescription_for_session(
+        MagicMock(),
+        user_id=OWNER_ID,
+        workout_session_id=SESSION_ID,
+        payload=payload,
+    )
+
+    _, called_kwargs = create_mock.call_args
+    dumped = called_kwargs["progression_params"]
+    assert dumped == {"increment": 5.0}
+    assert type(dumped) is dict
 
 
 def test_create_exercise_prescription_with_invisible_exercise_raises_not_visible(
@@ -299,6 +342,38 @@ def test_update_exercise_prescription_applies_only_explicitly_set_fields(
 
     _, called_kwargs = update_mock.call_args
     assert called_kwargs == {"target_sets": 3}
+
+
+def test_update_exercise_prescription_dumps_progression_params_to_a_plain_dict(
+    monkeypatch,
+):
+    prescription = _prescription()
+    monkeypatch.setattr(
+        exercise_prescriptions_service.exercise_prescriptions_repo,
+        "get_exercise_prescription_with_owner",
+        lambda *a, **k: (prescription, OWNER_ID),
+    )
+    update_mock = MagicMock(side_effect=lambda session, rx, **fields: rx)
+    monkeypatch.setattr(
+        exercise_prescriptions_service.exercise_prescriptions_repo,
+        "update_exercise_prescription",
+        update_mock,
+    )
+    payload = ExercisePrescriptionUpdate(
+        progression_params=ProgressionParams(percentage=0.03)
+    )
+
+    exercise_prescriptions_service.update_exercise_prescription(
+        MagicMock(),
+        user_id=OWNER_ID,
+        prescription_id=PRESCRIPTION_ID,
+        payload=payload,
+    )
+
+    _, called_kwargs = update_mock.call_args
+    dumped = called_kwargs["progression_params"]
+    assert dumped == {"percentage": 0.03}
+    assert type(dumped) is dict
 
 
 def test_update_exercise_prescription_with_no_fields_set_does_not_call_repo_update(

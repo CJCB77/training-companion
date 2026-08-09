@@ -291,3 +291,51 @@ def test_update_exercise_prescription_with_null_exercise_id_returns_422(
 
     assert response.status_code == 422
     assert response.json()["error"]["message"] == "exercise_id cannot be null"
+
+
+def test_create_exercise_prescription_with_unknown_progression_params_key_returns_422(
+    authenticated_client,
+):
+    payload = _create_payload(progression_params={"unknown_key": 1})
+
+    response = authenticated_client.post(
+        f"/workout-sessions/{SESSION_ID}/exercise-prescriptions", json=payload
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_exercise_prescription_with_out_of_range_percentage_returns_422(
+    authenticated_client,
+):
+    payload = _create_payload(progression_params={"percentage": 0})
+
+    response = authenticated_client.post(
+        f"/workout-sessions/{SESSION_ID}/exercise-prescriptions", json=payload
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_exercise_prescription_with_negative_increment_returns_422(
+    authenticated_client,
+):
+    payload = {"progression_params": {"increment": -2.5}}
+
+    response = authenticated_client.put(
+        f"/exercise-prescriptions/{PRESCRIPTION_ID}", json=payload
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_exercise_prescription_with_invalid_deload_percentage_returns_422(
+    authenticated_client,
+):
+    payload = {"progression_params": {"deload": {"percentage": 1.0}}}
+
+    response = authenticated_client.put(
+        f"/exercise-prescriptions/{PRESCRIPTION_ID}", json=payload
+    )
+
+    assert response.status_code == 422

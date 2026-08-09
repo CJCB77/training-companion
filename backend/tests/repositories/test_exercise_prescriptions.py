@@ -1,8 +1,11 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.repositories import exercise_prescriptions as exercise_prescriptions_repo
 from tests.factories import (
     make_exercise,
+    make_exercise_performance,
     make_exercise_prescription,
     make_profile,
     make_program,
@@ -30,6 +33,29 @@ def _make_session(session, *, user=None):
     workout_session = make_workout_session(week_id=week.id)
     _persist(session, workout_session)
     return user, workout_session, exercise
+
+
+def _make_program_and_exercise(session, *, user=None):
+    """Like `_make_session`, but stops one level up (program + week, no workout
+    session yet) — `list_prior_attempts` tests need to create several sessions
+    within the same program.
+    """
+    user = user or make_profile()
+    exercise = make_exercise(created_by_user_id=user.id)
+    _persist(session, user, exercise)
+    program = make_program(user_id=user.id)
+    _persist(session, program)
+    week = make_training_week(program_id=program.id, week_number=1)
+    _persist(session, week)
+    return user, program, week, exercise
+
+
+def _completed_session(session, *, week_id, order_index, completed_at):
+    workout_session = make_workout_session(
+        week_id=week_id, order_index=order_index, completed_at=completed_at
+    )
+    _persist(session, workout_session)
+    return workout_session
 
 
 def test_create_and_get_exercise_prescription(db_session):
@@ -172,3 +198,172 @@ def test_delete_exercise_prescription_leaves_its_exercise_untouched(db_session):
         is None
     )
     assert db_session.get(type(exercise), exercise.id) is not None
+
+
+def test_list_prior_attempts_orders_newest_completed_session_first(db_session):
+    _, program, week, exercise = _make_program_and_exercise(db_session)
+    now = datetime.now(timezone.utc)
+    older_session = _completed_session(
+        db_session, week_id=week.id, order_index=0, completed_at=now - timedelta(days=7)
+    )
+    newer_session = _completed_session(
+        db_session, week_id=week.id, order_index=1, completed_at=now - timedelta(days=1)
+    )
+    older_prescription = make_exercise_prescription(
+        workout_session_id=older_session.id, exercise_id=exercise.id
+    )
+    _persist(db_session, older_prescription)
+    newer_prescription = make_exercise_prescription(
+        workout_session_id=newer_session.id, exercise_id=exercise.id
+    )
+    _persist(db_session, newer_prescription)
+
+    rows = exercise_prescriptions_repo.list_prior_attempts(
+        db_session, program_id=program.id, exercise_id=exercise.id, limit=10
+    )
+
+    assert [prescription.id for prescription, _ in rows] == [
+        newer_prescription.id,
+        older_prescription.id,
+    ]
+
+
+def test_list_prior_attempts_excludes_sessions_that_are_not_completed(db_session):
+    _, program, week, exercise = _make_program_and_exercise(db_session)
+    completed = _completed_session(
+        db_session,
+        week_id=week.id,
+        order_index=0,
+        completed_at=datetime.now(timezone.utc),
+    )
+    incomplete = make_workout_session(week_id=week.id, order_index=1)
+    _persist(db_session, incomplete)
+    completed_prescription = make_exercise_prescription(
+        workout_session_id=completed.id, exercise_id=exercise.id
+    )
+    _persist(db_session, completed_prescription)
+    incomplete_prescription = make_exercise_prescription(
+        workout_session_id=incomplete.id, exercise_id=exercise.id
+    )
+    _persist(db_session, incomplete_prescription)
+
+    rows = exercise_prescriptions_repo.list_prior_attempts(
+        db_session, program_id=program.id, exercise_id=exercise.id, limit=10
+    )
+
+    assert [prescription.id for prescription, _ in rows] == [completed_prescription.id]
+
+
+def test_list_prior_attempts_scoped_to_program_and_exercise(db_session):
+    user, program, week, exercise = _make_program_and_exercise(db_session)
+    other_exercise = make_exercise(created_by_user_id=user.id)
+    _persist(db_session, other_exercise)
+    other_program = make_program(user_id=user.id)
+    _persist(db_session, other_program)
+    other_week = make_training_week(program_id=other_program.id, week_number=1)
+    _persist(db_session, other_week)
+
+    now = datetime.now(timezone.utc)
+    in_scope_session = _completed_session(
+        db_session, week_id=week.id, order_index=0, completed_at=now
+    )
+    in_scope_prescription = make_exercise_prescription(
+        workout_session_id=in_scope_session.id, exercise_id=exercise.id
+    )
+    _persist(db_session, in_scope_prescription)
+
+    # Same session, different exercise -> out of scope.
+    wrong_exercise_prescription = make_exercise_prescription(
+        workout_session_id=in_scope_session.id, exercise_id=other_exercise.id
+    )
+    _persist(db_session, wrong_exercise_prescription)
+
+    # Same exercise, different program -> out of scope.
+    other_program_session = _completed_session(
+        db_session, week_id=other_week.id, order_index=0, completed_at=now
+    )
+    wrong_program_prescription = make_exercise_prescription(
+        workout_session_id=other_program_session.id, exercise_id=exercise.id
+    )
+    _persist(db_session, wrong_program_prescription)
+
+    rows = exercise_prescriptions_repo.list_prior_attempts(
+        db_session, program_id=program.id, exercise_id=exercise.id, limit=10
+    )
+
+    assert [prescription.id for prescription, _ in rows] == [in_scope_prescription.id]
+
+
+def test_list_prior_attempts_pairs_each_prescription_with_its_own_performances(
+    db_session,
+):
+    _, program, week, exercise = _make_program_and_exercise(db_session)
+    session_a = _completed_session(
+        db_session,
+        week_id=week.id,
+        order_index=0,
+        completed_at=datetime.now(timezone.utc),
+    )
+    prescription_a = make_exercise_prescription(
+        workout_session_id=session_a.id, exercise_id=exercise.id
+    )
+    _persist(db_session, prescription_a)
+    performance_a1 = make_exercise_performance(
+        prescription_id=prescription_a.id, set_number=1
+    )
+    performance_a2 = make_exercise_performance(
+        prescription_id=prescription_a.id, set_number=2
+    )
+    _persist(db_session, performance_a1, performance_a2)
+
+    session_b = _completed_session(
+        db_session,
+        week_id=week.id,
+        order_index=1,
+        completed_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+    prescription_b = make_exercise_prescription(
+        workout_session_id=session_b.id, exercise_id=exercise.id
+    )
+    _persist(db_session, prescription_b)
+    # No performances logged for prescription_b — the row must still come back,
+    # paired with an empty list, not be omitted (exclusion of unlogged rows is the
+    # service layer's job, in build_attempt_history — this repo function is just
+    # the raw pairing).
+
+    rows = exercise_prescriptions_repo.list_prior_attempts(
+        db_session, program_id=program.id, exercise_id=exercise.id, limit=10
+    )
+    performances_by_prescription_id = {
+        prescription.id: performances for prescription, performances in rows
+    }
+
+    assert {p.id for p in performances_by_prescription_id[prescription_a.id]} == {
+        performance_a1.id,
+        performance_a2.id,
+    }
+    assert performances_by_prescription_id[prescription_b.id] == []
+
+
+def test_list_prior_attempts_respects_the_limit(db_session):
+    _, program, week, exercise = _make_program_and_exercise(db_session)
+    now = datetime.now(timezone.utc)
+    for i in range(5):
+        session = _completed_session(
+            db_session,
+            week_id=week.id,
+            order_index=i,
+            completed_at=now - timedelta(days=i),
+        )
+        _persist(
+            db_session,
+            make_exercise_prescription(
+                workout_session_id=session.id, exercise_id=exercise.id
+            ),
+        )
+
+    rows = exercise_prescriptions_repo.list_prior_attempts(
+        db_session, program_id=program.id, exercise_id=exercise.id, limit=2
+    )
+
+    assert len(rows) == 2

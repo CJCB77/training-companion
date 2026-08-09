@@ -1,8 +1,10 @@
+from collections import defaultdict
 from typing import Any
 
 from sqlmodel import Session, select
 
 from app.models.enums import ProgressionType
+from app.models.exercise_performance import ExercisePerformance
 from app.models.exercise_prescription import ExercisePrescription
 from app.models.program import Program
 from app.models.training_week import TrainingWeek
@@ -123,3 +125,54 @@ def delete_exercise_prescription(
 ) -> None:
     session.delete(prescription)
     session.commit()
+
+
+def list_prior_attempts(
+    session: Session,
+    *,
+    program_id: int,
+    exercise_id: int,
+    limit: int,
+) -> list[tuple[ExercisePrescription, list[ExercisePerformance]]]:
+    """Prior prescriptions of `exercise_id` within `program_id` whose session was
+    completed, newest first (by `WorkoutSession.completed_at`), each paired with its
+    logged performances.
+
+    Two queries total, not N+1: the prescriptions (with the same prescription ->
+    session -> week -> program join chain already used by
+    `exercise_performances_repo.get_exercise_performance_with_owner`), then their
+    performances fetched in one follow-up query keyed by prescription id.
+    """
+    prescriptions_statement = (
+        select(ExercisePrescription)
+        .join(
+            WorkoutSession,
+            ExercisePrescription.workout_session_id == WorkoutSession.id,  # type: ignore[arg-type]
+        )
+        .join(TrainingWeek, WorkoutSession.week_id == TrainingWeek.id)  # type: ignore[arg-type]
+        .where(
+            TrainingWeek.program_id == program_id,
+            ExercisePrescription.exercise_id == exercise_id,
+            WorkoutSession.completed_at.is_not(None),  # type: ignore[union-attr]
+        )
+        .order_by(WorkoutSession.completed_at.desc())  # type: ignore[union-attr]
+        .limit(limit)
+    )
+    prescriptions = list(session.exec(prescriptions_statement).all())
+    if not prescriptions:
+        return []
+
+    prescription_ids = [p.id for p in prescriptions]
+    performances_statement = select(ExercisePerformance).where(
+        ExercisePerformance.prescription_id.in_(prescription_ids)  # type: ignore[attr-defined]
+    )
+    performances_by_prescription: dict[int, list[ExercisePerformance]] = defaultdict(
+        list
+    )
+    for performance in session.exec(performances_statement).all():
+        performances_by_prescription[performance.prescription_id].append(performance)
+
+    return [
+        (prescription, performances_by_prescription.get(prescription.id, []))
+        for prescription in prescriptions
+    ]

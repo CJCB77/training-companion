@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.schemas.programs import ProgramCreate, ProgramUpdate
+from app.schemas.progression import ProgressionParams
 from app.services import programs as programs_service
 from tests.factories import make_program
 
@@ -326,6 +327,48 @@ def test_create_program_for_user_with_is_active_false_does_not_deactivate_others
 
     deactivate_mock.assert_not_called()
     create_mock.assert_called_once()
+
+
+def test_create_program_dumps_progression_params_to_a_plain_dict(monkeypatch):
+    # The real break risk flagged in TRAIN-20's design plan: SQLModel won't
+    # serialize a ProgressionParams instance into the JSONB column, so the
+    # repository must receive a plain dict, not the Pydantic model.
+    create_mock = MagicMock(return_value=_owned_program())
+    monkeypatch.setattr(programs_service.programs_repo, "create_program", create_mock)
+    payload = ProgramCreate(
+        name="New Block",
+        default_progression_params=ProgressionParams(increment=2.5),
+    )
+
+    programs_service.create_program_for_user(
+        MagicMock(), user_id=OWNER_ID, payload=payload
+    )
+
+    _, called_kwargs = create_mock.call_args
+    dumped = called_kwargs["default_progression_params"]
+    assert dumped == {"increment": 2.5}
+    assert type(dumped) is dict
+
+
+def test_update_program_dumps_progression_params_to_a_plain_dict(monkeypatch):
+    program = _owned_program()
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: program
+    )
+    update_mock = MagicMock(side_effect=lambda session, prog, **fields: prog)
+    monkeypatch.setattr(programs_service.programs_repo, "update_program", update_mock)
+    payload = ProgramUpdate(
+        default_progression_params=ProgressionParams(percentage=0.025)
+    )
+
+    programs_service.update_program(
+        MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID, payload=payload
+    )
+
+    _, called_kwargs = update_mock.call_args
+    dumped = called_kwargs["default_progression_params"]
+    assert dumped == {"percentage": 0.025}
+    assert type(dumped) is dict
 
 
 def test_update_program_setting_is_active_true_deactivates_others_first(monkeypatch):

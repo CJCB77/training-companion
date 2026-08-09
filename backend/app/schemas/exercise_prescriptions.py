@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.models.enums import ProgressionType
+from app.schemas.progression import ProgressionParams
 
 
 class ExercisePrescriptionCreate(BaseModel):
@@ -18,7 +19,7 @@ class ExercisePrescriptionCreate(BaseModel):
     target_weight: float | None = Field(default=None, ge=0)
     target_rpe: float | None = Field(default=None, ge=1, le=10)
     progression_type: ProgressionType | None = None
-    progression_params: dict | None = None
+    progression_params: ProgressionParams | None = None
     notes: str | None = None
 
 
@@ -32,7 +33,7 @@ class ExercisePrescriptionUpdate(BaseModel):
     target_weight: float | None = Field(default=None, ge=0)
     target_rpe: float | None = Field(default=None, ge=1, le=10)
     progression_type: ProgressionType | None = None
-    progression_params: dict | None = None
+    progression_params: ProgressionParams | None = None
     notes: str | None = None
 
 
