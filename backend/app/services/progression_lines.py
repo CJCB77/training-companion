@@ -8,6 +8,7 @@ from sqlmodel import Session
 
 from app.models.progression_line import ProgressionLine
 from app.repositories import progression_lines as progression_lines_repo
+from app.schemas.progression_lines import ProgressionLineUpdate
 from app.services import programs as programs_service
 
 
@@ -49,11 +50,22 @@ def list_progression_lines(
 
 
 def rename_progression_line(
-    session: Session, *, user_id: int, line_id: int, label: str | None
+    session: Session, *, user_id: int, line_id: int, payload: ProgressionLineUpdate
 ) -> ProgressionLine:
     """Label-only update. Renaming is decorative — it never touches `is_default`
     and never touches any prescription; see CLAUDE.md's "the label is decorative
     only" and the label-immateriality acceptance criterion this is built to satisfy.
+
+    `exclude_unset=True`, matching the partial-update convention every other
+    write endpoint here uses (see `exercise_prescriptions_service.
+    update_exercise_prescription`): an empty `PATCH {}` body is a no-op rather
+    than clearing the label. An explicit `{"label": null}` still clears it —
+    that key *is* set, just to `None`.
     """
     line = get_owned_progression_line(session, user_id=user_id, line_id=line_id)
-    return progression_lines_repo.update_progression_line_label(session, line, label)
+    updates = payload.model_dump(exclude_unset=True)
+    if "label" not in updates:
+        return line
+    return progression_lines_repo.update_progression_line_label(
+        session, line, updates["label"]
+    )

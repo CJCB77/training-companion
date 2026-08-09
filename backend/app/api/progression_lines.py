@@ -60,7 +60,7 @@ def rename_progression_line(
 ) -> ProgressionLineRead:
     try:
         return progression_lines_service.rename_progression_line(
-            db_session, user_id=current_user.id, line_id=line_id, label=payload.label
+            db_session, user_id=current_user.id, line_id=line_id, payload=payload
         )
     except (
         progression_lines_service.ProgressionLineNotFoundError,

@@ -122,19 +122,43 @@ def update_exercise_prescription(
     return prescription
 
 
-def update_exercise_prescription_progression_line(
-    session: Session, prescription: ExercisePrescription, *, progression_line_id: int
+def update_exercise_prescription_with_progression_line(
+    session: Session,
+    prescription: ExercisePrescription,
+    *,
+    progression_line_id: int,
+    **fields: Any,
 ) -> ExercisePrescription:
-    """Sets `progression_line_id` directly, bypassing `_UPDATABLE_FIELDS`.
+    """Sets `progression_line_id` directly (bypassing `_UPDATABLE_FIELDS`) together
+    with any other prescription fields (typically `exercise_id`), in a single
+    add/commit.
 
-    That allow-list deliberately excludes `progression_line_id` — a user cannot
-    re-assign a prescription to a different *existing* line (a ticket non-goal).
-    This is a distinct, purpose-built path: the service's automatic re-resolution
+    Single-transaction is the point: when `exercise_id` changes on a default-line
+    prescription, the service re-resolves the new exercise's default line and both
+    writes must land together. Two separate commits (write `exercise_id`, then
+    write `progression_line_id`) would leave a window where a failure between them
+    permanently commits a prescription whose `exercise_id` disagrees with its
+    `progression_line.exercise_id` — exactly the invariant this ticket exists to
+    protect, with nothing to detect or repair it after the fact.
+
+    `fields` still goes through the same `_UPDATABLE_FIELDS` allow-list as
+    `update_exercise_prescription`; only `progression_line_id` bypasses it, since
+    that allow-list deliberately excludes it — a user cannot re-assign a
+    prescription to a different *existing* line (a ticket non-goal). This function
+    is a distinct, purpose-built path: the service's automatic re-resolution
     to the new exercise's default line when `exercise_id` changes on a
     default-line prescription. Mirrors `programs_repo.archive_program`/
     `unarchive_program` setting `archived_at` directly rather than through the
     generic `update_program`.
     """
+    unknown = set(fields) - _UPDATABLE_FIELDS
+    if unknown:
+        raise ValueError(
+            "update_exercise_prescription_with_progression_line cannot set "
+            f"fields: {sorted(unknown)}"
+        )
+    for key, value in fields.items():
+        setattr(prescription, key, value)
     prescription.progression_line_id = progression_line_id
     session.add(prescription)
     session.commit()

@@ -256,16 +256,20 @@ def update_exercise_prescription(
         if exercise is None:
             raise ExerciseNotVisibleError(new_exercise_id)
 
-        # Every prescription has a line, so an exercise change always invalidates
-        # the current one — it belongs to the old exercise. Not a blanket 422
-        # (that would regress the pre-line behavior of "fixing a mis-picked
-        # exercise just works"):
+        # Every prescription has a line (NOT NULL FK, RESTRICT — it can never
+        # point at a deleted or missing row, so `current_line` is guaranteed
+        # non-None here), so an exercise change always invalidates the current
+        # one: it belongs to the old exercise. Not a blanket 422 (that would
+        # regress the pre-line behavior of "fixing a mis-picked exercise just
+        # works"):
         current_line = progression_lines_repo.get_progression_line(
             session, prescription.progression_line_id
         )
-        if current_line is not None and current_line.is_default:
+        if current_line.is_default:  # type: ignore[union-attr]
             # Default line -> silently re-resolve to the new exercise's default
-            # line (find-or-create). Behavior identical to today.
+            # line (find-or-create). Behavior identical to today. Resolved here,
+            # *before* the write below, so both the new exercise_id and the new
+            # progression_line_id land in the same commit.
             program_id = prescription.workout_session.week.program_id
             new_line = _find_or_create_default_progression_line(
                 session, program_id=program_id, exercise_id=new_exercise_id
@@ -280,16 +284,19 @@ def update_exercise_prescription(
                 "an explicit (non-default) progression line"
             )
 
-    prescription = exercise_prescriptions_repo.update_exercise_prescription(
+    if new_progression_line_id is not None:
+        # Single commit: exercise_id and progression_line_id must land together,
+        # never as two separately-committed writes — see
+        # update_exercise_prescription_with_progression_line's docstring.
+        return exercise_prescriptions_repo.update_exercise_prescription_with_progression_line(
+            session,
+            prescription,
+            progression_line_id=new_progression_line_id,
+            **updates,
+        )
+    return exercise_prescriptions_repo.update_exercise_prescription(
         session, prescription, **updates
     )
-    if new_progression_line_id is not None:
-        prescription = (
-            exercise_prescriptions_repo.update_exercise_prescription_progression_line(
-                session, prescription, progression_line_id=new_progression_line_id
-            )
-        )
-    return prescription
 
 
 def delete_exercise_prescription(
