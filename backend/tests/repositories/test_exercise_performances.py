@@ -8,6 +8,7 @@ from tests.factories import (
     make_exercise_prescription,
     make_profile,
     make_program,
+    make_progression_line,
     make_training_week,
     make_workout_session,
 )
@@ -31,15 +32,19 @@ def _make_prescription(session, *, user=None):
     _persist(session, week)
     workout_session = make_workout_session(week_id=week.id)
     _persist(session, workout_session)
+    line = make_progression_line(program_id=program.id, exercise_id=exercise.id)
+    _persist(session, line)
     prescription = make_exercise_prescription(
-        workout_session_id=workout_session.id, exercise_id=exercise.id
+        workout_session_id=workout_session.id,
+        exercise_id=exercise.id,
+        progression_line_id=line.id,
     )
     _persist(session, prescription)
-    return user, workout_session, prescription
+    return user, workout_session, prescription, program
 
 
 def test_create_and_get_exercise_performance(db_session):
-    _, _workout_session, prescription = _make_prescription(db_session)
+    _, _workout_session, prescription, _program = _make_prescription(db_session)
 
     performance = exercise_performances_repo.create_exercise_performance(
         db_session,
@@ -59,7 +64,7 @@ def test_create_and_get_exercise_performance(db_session):
 def test_get_exercise_performance_with_owner_returns_the_owning_programs_user_id(
     db_session,
 ):
-    user, _workout_session, prescription = _make_prescription(db_session)
+    user, _workout_session, prescription, _program = _make_prescription(db_session)
     performance = make_exercise_performance(prescription_id=prescription.id)
     _persist(db_session, performance)
 
@@ -84,7 +89,7 @@ def test_get_exercise_performance_with_owner_for_missing_performance_returns_non
 
 
 def test_list_performances_for_prescription_orders_by_set_number_then_id(db_session):
-    _, _workout_session, prescription = _make_prescription(db_session)
+    _, _workout_session, prescription, _program = _make_prescription(db_session)
     tied_first = make_exercise_performance(
         prescription_id=prescription.id, set_number=2
     )
@@ -110,12 +115,17 @@ def test_list_performances_for_prescription_orders_by_set_number_then_id(db_sess
 def test_list_performances_for_session_orders_by_prescription_then_set_number(
     db_session,
 ):
-    user, workout_session, first_prescription = _make_prescription(db_session)
+    user, workout_session, first_prescription, program = _make_prescription(db_session)
     second_exercise = make_exercise(created_by_user_id=user.id)
     _persist(db_session, second_exercise)
+    second_line = make_progression_line(
+        program_id=program.id, exercise_id=second_exercise.id
+    )
+    _persist(db_session, second_line)
     second_prescription = make_exercise_prescription(
         workout_session_id=workout_session.id,
         exercise_id=second_exercise.id,
+        progression_line_id=second_line.id,
         order_index=1,
     )
     _persist(db_session, second_prescription)
@@ -141,7 +151,7 @@ def test_list_performances_for_session_orders_by_prescription_then_set_number(
 def test_get_max_set_number_returns_none_when_prescription_has_no_performances(
     db_session,
 ):
-    _, _workout_session, prescription = _make_prescription(db_session)
+    _, _workout_session, prescription, _program = _make_prescription(db_session)
 
     assert (
         exercise_performances_repo.get_max_set_number(db_session, prescription.id)
@@ -150,7 +160,7 @@ def test_get_max_set_number_returns_none_when_prescription_has_no_performances(
 
 
 def test_get_max_set_number_returns_the_highest_set_number(db_session):
-    _, _workout_session, prescription = _make_prescription(db_session)
+    _, _workout_session, prescription, _program = _make_prescription(db_session)
     _persist(
         db_session,
         make_exercise_performance(prescription_id=prescription.id, set_number=1),
@@ -165,7 +175,7 @@ def test_get_max_set_number_returns_the_highest_set_number(db_session):
 def test_update_exercise_performance_with_disallowed_field_raises_value_error(
     db_session,
 ):
-    _, _workout_session, prescription = _make_prescription(db_session)
+    _, _workout_session, prescription, _program = _make_prescription(db_session)
     performance = make_exercise_performance(prescription_id=prescription.id)
     _persist(db_session, performance)
 
@@ -176,7 +186,7 @@ def test_update_exercise_performance_with_disallowed_field_raises_value_error(
 
 
 def test_delete_exercise_performance_leaves_its_prescription_untouched(db_session):
-    _, _workout_session, prescription = _make_prescription(db_session)
+    _, _workout_session, prescription, _program = _make_prescription(db_session)
     performance = make_exercise_performance(prescription_id=prescription.id)
     _persist(db_session, performance)
 
@@ -192,7 +202,7 @@ def test_delete_exercise_performance_leaves_its_prescription_untouched(db_sessio
 def test_deleting_prescription_cascades_to_its_performances(db_session):
     from app.repositories import exercise_prescriptions as exercise_prescriptions_repo
 
-    _, _workout_session, prescription = _make_prescription(db_session)
+    _, _workout_session, prescription, _program = _make_prescription(db_session)
     performance = make_exercise_performance(prescription_id=prescription.id)
     _persist(db_session, performance)
 
