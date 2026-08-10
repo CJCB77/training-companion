@@ -6,6 +6,7 @@ from app.api.exercise_performances import router as exercise_performances_router
 from app.api.exercise_prescriptions import router as exercise_prescriptions_router
 from app.api.exercises import router as exercises_router
 from app.api.health import router as health_router
+from app.api.history import router as history_router
 from app.api.profile import router as profile_router
 from app.api.programs import router as programs_router
 from app.api.progression import router as progression_router
@@ -49,5 +50,6 @@ app.include_router(exercise_prescriptions_router)
 app.include_router(exercise_performances_router)
 app.include_router(progression_router)
 app.include_router(progression_lines_router)
+app.include_router(history_router)
 
 register_error_handlers(app)
