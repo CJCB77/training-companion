@@ -42,9 +42,7 @@ def upgrade() -> None:
         sa.Column("slug", sa.String(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("description", sa.String(), nullable=True),
-        sa.Column(
-            "weight_unit", sa.String(), server_default="kg", nullable=False
-        ),
+        sa.Column("weight_unit", sa.String(), server_default="kg", nullable=False),
         sa.Column("default_progression_type", sa.String(), nullable=True),
         sa.Column("default_progression_params", JSONB(), nullable=True),
         sa.Column("structure", JSONB(), nullable=False),

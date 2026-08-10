@@ -9,7 +9,5 @@ def list_program_templates(session: Session) -> list[ProgramTemplate]:
     )
 
 
-def get_program_template(
-    session: Session, template_id: int
-) -> ProgramTemplate | None:
+def get_program_template(session: Session, template_id: int) -> ProgramTemplate | None:
     return session.get(ProgramTemplate, template_id)
