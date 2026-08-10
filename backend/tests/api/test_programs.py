@@ -296,6 +296,24 @@ def test_duplicate_program_owned_by_caller_returns_201(
     assert response.json()["id"] == PROGRAM_ID
 
 
+def test_duplicate_program_with_no_body_returns_201(
+    authenticated_client, current_user, monkeypatch
+):
+    """The request body is optional end to end — a zero-typing "Duplicate" tap
+    sends no body at all, not even `{}`. Regression guard for the payload
+    parameter needing a default; without one FastAPI 422s a bodyless POST.
+    """
+    duplicate = _program_read_double(current_user.id)
+    monkeypatch.setattr(
+        programs_service, "duplicate_program", lambda *a, **k: duplicate
+    )
+
+    response = authenticated_client.post(f"/programs/{PROGRAM_ID}/duplicate")
+
+    assert response.status_code == 201
+    assert response.json()["id"] == PROGRAM_ID
+
+
 def test_duplicate_program_not_found_returns_404(authenticated_client, monkeypatch):
     def _raise(*args, **kwargs):
         raise programs_service.ProgramNotFoundError(PROGRAM_ID)

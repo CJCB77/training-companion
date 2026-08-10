@@ -122,7 +122,7 @@ def unarchive_program(
 )
 def duplicate_program(
     program_id: int,
-    payload: ProgramDuplicateRequest,
+    payload: ProgramDuplicateRequest = ProgramDuplicateRequest(),
     current_user: Profile = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> ProgramRead:

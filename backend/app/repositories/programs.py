@@ -230,34 +230,40 @@ def duplicate_program_tree(session: Session, *, source: Program, name: str) -> P
     # 3. Copy every ProgressionLine, explicitly — ProgressionLine deliberately has no
     # ORM Relationship in either direction (see its model docstring), so nothing here
     # is wired by cascade. Copy all source lines, not only currently-referenced ones.
-    line_id_map: dict[int, int] = {}
-    for line in lines:
-        new_line = ProgressionLine(
+    new_lines = [
+        ProgressionLine(
             program_id=new_program.id,
             exercise_id=line.exercise_id,
             is_default=line.is_default,
             label=line.label,
         )
-        session.add(new_line)
-        session.flush()
-        line_id_map[line.id] = new_line.id
+        for line in lines
+    ]
+    session.add_all(new_lines)
+    session.flush()
+    line_id_map: dict[int, int] = {
+        line.id: new_line.id for line, new_line in zip(lines, new_lines)
+    }
 
-    # 4. Build weeks -> sessions -> prescriptions, flushing between levels to obtain
-    # parent ids.
-    week_id_map: dict[int, int] = {}
-    for week in weeks:
-        new_week = TrainingWeek(
+    # 4. Build weeks -> sessions -> prescriptions, flushing once per level (not once
+    # per row) to obtain parent ids — SQLAlchemy populates PKs on every pending
+    # object at the first flush after add(), so one flush per level is enough.
+    new_weeks = [
+        TrainingWeek(
             program_id=new_program.id,
             week_number=week.week_number,
             name=week.name,
         )
-        session.add(new_week)
-        session.flush()
-        week_id_map[week.id] = new_week.id
+        for week in weeks
+    ]
+    session.add_all(new_weeks)
+    session.flush()
+    week_id_map: dict[int, int] = {
+        week.id: new_week.id for week, new_week in zip(weeks, new_weeks)
+    }
 
-    session_id_map: dict[int, int] = {}
-    for workout_session in sessions:
-        new_session = WorkoutSession(
+    new_sessions = [
+        WorkoutSession(
             week_id=week_id_map[workout_session.week_id],
             day_name=workout_session.day_name,
             order_index=workout_session.order_index,
@@ -265,9 +271,14 @@ def duplicate_program_tree(session: Session, *, source: Program, name: str) -> P
             completed_at=None,
             notes=None,
         )
-        session.add(new_session)
-        session.flush()
-        session_id_map[workout_session.id] = new_session.id
+        for workout_session in sessions
+    ]
+    session.add_all(new_sessions)
+    session.flush()
+    session_id_map: dict[int, int] = {
+        workout_session.id: new_session.id
+        for workout_session, new_session in zip(sessions, new_sessions)
+    }
 
     for prescription in prescriptions:
         new_prescription = ExercisePrescription(

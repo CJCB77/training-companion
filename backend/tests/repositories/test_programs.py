@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 import pytest
 from sqlmodel import select
 
-from app.models.enums import WeightUnit
+from app.models.enums import ProgressionType, WeightUnit
 from app.models.exercise import Exercise
 from app.models.exercise_performance import ExercisePerformance
 from app.models.exercise_prescription import ExercisePrescription
@@ -319,25 +319,38 @@ def test_delete_program_with_progression_lines_succeeds(db_session):
 
 
 def _build_program_with_two_lines(db_session, *, user_id: int, **program_overrides):
-    """A program with one week/session, two ProgressionLines for the same
-    exercise (a heavy-day/light-day split), two prescriptions sharing the first
-    line and one prescription on the second line — the shape the load-bearing
-    line-structure assertions need.
+    """A program with two weeks (one session each), two ProgressionLines for the
+    same exercise (a heavy-day/light-day split), two prescriptions sharing the
+    first line and one prescription on the second line — the shape the
+    load-bearing line-structure assertions need. Two weeks/sessions (rather than
+    one of each) so duplication's week_id_map/session_id_map are actually
+    exercised with more than a single entry — a copy that parented everything
+    to the first week/session would still pass a single-week fixture.
     """
     exercise = make_exercise(created_by_user_id=user_id)
     _persist(db_session, exercise)
 
     program = make_program(user_id=user_id, **program_overrides)
     _persist(db_session, program)
-    week = make_training_week(program_id=program.id)
+    week = make_training_week(program_id=program.id, week_number=1, name="Week 1")
     _persist(db_session, week)
+    week2 = make_training_week(program_id=program.id, week_number=2, name="Week 2")
+    _persist(db_session, week2)
     session_day = make_workout_session(
         week_id=week.id,
+        day_name="Day A",
+        order_index=0,
         notes="Felt heavy today",
         started_at=datetime.now(timezone.utc),
         completed_at=datetime.now(timezone.utc),
     )
     _persist(db_session, session_day)
+    session_day2 = make_workout_session(
+        week_id=week2.id,
+        day_name="Day B",
+        order_index=0,
+    )
+    _persist(db_session, session_day2)
 
     shared_line = make_progression_line(
         program_id=program.id,
@@ -358,6 +371,12 @@ def _build_program_with_two_lines(db_session, *, user_id: int, **program_overrid
         exercise_id=exercise.id,
         progression_line_id=shared_line.id,
         order_index=0,
+        target_sets=5,
+        target_reps=5,
+        target_weight=100.0,
+        target_rpe=8.0,
+        progression_type=ProgressionType.PERCENTAGE,
+        progression_params={"pct": 2.5},
         notes="Work up to a heavy triple",
     )
     rx_shared_2 = make_exercise_prescription(
@@ -367,7 +386,7 @@ def _build_program_with_two_lines(db_session, *, user_id: int, **program_overrid
         order_index=1,
     )
     rx_separate = make_exercise_prescription(
-        workout_session_id=session_day.id,
+        workout_session_id=session_day2.id,
         exercise_id=exercise.id,
         progression_line_id=separate_line.id,
         order_index=2,
@@ -380,7 +399,9 @@ def _build_program_with_two_lines(db_session, *, user_id: int, **program_overrid
     return {
         "program": program,
         "week": week,
+        "week2": week2,
         "session": session_day,
+        "session2": session_day2,
         "shared_line": shared_line,
         "separate_line": separate_line,
         "rx_shared_1": rx_shared_1,
@@ -514,14 +535,16 @@ def test_duplicate_program_tree_clears_dates_and_session_execution_state(db_sess
 
     assert copy.start_date is None
     assert copy.end_date is None
-    copied_session = db_session.exec(
+    copied_sessions = db_session.exec(
         select(WorkoutSession)
         .join(TrainingWeek)
         .where(TrainingWeek.program_id == copy.id)
-    ).one()
-    assert copied_session.notes is None
-    assert copied_session.started_at is None
-    assert copied_session.completed_at is None
+    ).all()
+    assert len(copied_sessions) == 2
+    for copied_session in copied_sessions:
+        assert copied_session.notes is None
+        assert copied_session.started_at is None
+        assert copied_session.completed_at is None
 
 
 def test_duplicate_program_tree_copies_prescription_notes(db_session):
@@ -543,6 +566,113 @@ def test_duplicate_program_tree_copies_prescription_notes(db_session):
         )
     ).one()
     assert copied_rx_with_notes.notes == tree["rx_shared_1"].notes
+
+
+def test_duplicate_program_tree_maps_each_session_to_its_own_copied_week(db_session):
+    """Regression guard for week_id_map/session_id_map: with two source weeks each
+    holding one distinctly-named session, every copied session must land under the
+    copy of *its own* week — an implementation that collapsed everything onto the
+    first copied week/session would still pass a single-week fixture but fails here.
+    """
+    user = make_profile()
+    _persist(db_session, user)
+    tree = _build_program_with_two_lines(db_session, user_id=user.id)
+
+    copy = programs_repo.duplicate_program_tree(
+        db_session, source=tree["program"], name="Copy"
+    )
+
+    copied_weeks = db_session.exec(
+        select(TrainingWeek).where(TrainingWeek.program_id == copy.id)
+    ).all()
+    assert len(copied_weeks) == 2
+    weeks_by_number = {week.week_number: week for week in copied_weeks}
+
+    copied_sessions = db_session.exec(
+        select(WorkoutSession)
+        .join(TrainingWeek)
+        .where(TrainingWeek.program_id == copy.id)
+    ).all()
+    sessions_by_week_id = {session.week_id: session for session in copied_sessions}
+
+    assert sessions_by_week_id[weeks_by_number[1].id].day_name == "Day A"
+    assert sessions_by_week_id[weeks_by_number[2].id].day_name == "Day B"
+
+
+def test_duplicate_program_tree_preserves_all_planning_fields(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    tree = _build_program_with_two_lines(db_session, user_id=user.id)
+
+    copy = programs_repo.duplicate_program_tree(
+        db_session, source=tree["program"], name="Copy"
+    )
+
+    copied_weeks = {
+        week.week_number: week
+        for week in db_session.exec(
+            select(TrainingWeek).where(TrainingWeek.program_id == copy.id)
+        ).all()
+    }
+    assert copied_weeks[1].name == tree["week"].name
+    assert copied_weeks[2].name == tree["week2"].name
+
+    copied_sessions = {
+        session.day_name: session
+        for session in db_session.exec(
+            select(WorkoutSession)
+            .join(TrainingWeek)
+            .where(TrainingWeek.program_id == copy.id)
+        ).all()
+    }
+    assert copied_sessions["Day A"].order_index == tree["session"].order_index
+    assert copied_sessions["Day B"].order_index == tree["session2"].order_index
+
+    copied_rx = db_session.exec(
+        select(ExercisePrescription)
+        .join(WorkoutSession)
+        .join(TrainingWeek)
+        .where(
+            TrainingWeek.program_id == copy.id,
+            ExercisePrescription.order_index == tree["rx_shared_1"].order_index,
+        )
+    ).one()
+    assert copied_rx.target_sets == tree["rx_shared_1"].target_sets
+    assert copied_rx.target_reps == tree["rx_shared_1"].target_reps
+    assert copied_rx.target_weight == tree["rx_shared_1"].target_weight
+    assert copied_rx.target_rpe == tree["rx_shared_1"].target_rpe
+    assert copied_rx.progression_type == tree["rx_shared_1"].progression_type
+    assert copied_rx.progression_params == tree["rx_shared_1"].progression_params
+
+
+def test_duplicate_program_tree_shallow_copies_jsonb_dicts(db_session):
+    """The plan's explicit decision: mutating the source's dict after duplication
+    must never leak into the copy's row — each row gets its own dict instance.
+    """
+    user = make_profile()
+    _persist(db_session, user)
+    tree = _build_program_with_two_lines(db_session, user_id=user.id)
+    source_program = tree["program"]
+    source_rx = tree["rx_shared_1"]
+
+    copy = programs_repo.duplicate_program_tree(
+        db_session, source=source_program, name="Copy"
+    )
+    copied_rx = db_session.exec(
+        select(ExercisePrescription)
+        .join(WorkoutSession)
+        .join(TrainingWeek)
+        .where(
+            TrainingWeek.program_id == copy.id,
+            ExercisePrescription.order_index == source_rx.order_index,
+        )
+    ).one()
+
+    source_program.default_progression_params["increment"] = 999
+    source_rx.progression_params["pct"] = 999
+
+    assert copy.default_progression_params["increment"] != 999
+    assert copied_rx.progression_params["pct"] != 999
 
 
 def test_duplicate_program_tree_with_zero_weeks_creates_empty_copy(db_session):
