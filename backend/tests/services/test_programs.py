@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.schemas.programs import ProgramCreate, ProgramUpdate
+from app.schemas.programs import ProgramCreate, ProgramDuplicateRequest, ProgramUpdate
 from app.schemas.progression import ProgressionParams
 from app.services import programs as programs_service
 from tests.factories import make_program
@@ -527,3 +527,83 @@ def test_list_programs_passes_include_archived_through_to_the_repo(monkeypatch):
     programs_service.list_programs(session, user_id=OWNER_ID, include_archived=True)
 
     list_mock.assert_called_once_with(session, user_id=OWNER_ID, include_archived=True)
+
+
+def test_duplicate_program_with_explicit_name_uses_it(monkeypatch):
+    source = _owned_program(name="Original")
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: source
+    )
+    duplicate_mock = MagicMock(return_value=_owned_program(name="Custom Name"))
+    monkeypatch.setattr(
+        programs_service.programs_repo, "duplicate_program_tree", duplicate_mock
+    )
+    session = MagicMock()
+    payload = ProgramDuplicateRequest(name="Custom Name")
+
+    programs_service.duplicate_program(
+        session, user_id=OWNER_ID, program_id=PROGRAM_ID, payload=payload
+    )
+
+    _, called_kwargs = duplicate_mock.call_args
+    assert called_kwargs == {"source": source, "name": "Custom Name"}
+
+
+def test_duplicate_program_without_name_defaults_to_source_name_plus_copy_suffix(
+    monkeypatch,
+):
+    source = _owned_program(name="Original")
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: source
+    )
+    duplicate_mock = MagicMock(return_value=_owned_program())
+    monkeypatch.setattr(
+        programs_service.programs_repo, "duplicate_program_tree", duplicate_mock
+    )
+    payload = ProgramDuplicateRequest()
+
+    programs_service.duplicate_program(
+        MagicMock(), user_id=OWNER_ID, program_id=PROGRAM_ID, payload=payload
+    )
+
+    _, called_kwargs = duplicate_mock.call_args
+    assert called_kwargs["name"] == f"{source.name} (Copy)"
+
+
+def test_duplicate_program_for_missing_program_raises_not_found(monkeypatch):
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: None
+    )
+    duplicate_mock = MagicMock()
+    monkeypatch.setattr(
+        programs_service.programs_repo, "duplicate_program_tree", duplicate_mock
+    )
+
+    with pytest.raises(programs_service.ProgramNotFoundError):
+        programs_service.duplicate_program(
+            MagicMock(),
+            user_id=OWNER_ID,
+            program_id=PROGRAM_ID,
+            payload=ProgramDuplicateRequest(),
+        )
+    duplicate_mock.assert_not_called()
+
+
+def test_duplicate_program_for_other_users_program_raises_access_denied(monkeypatch):
+    source = _owned_program(user_id=OTHER_USER_ID)
+    monkeypatch.setattr(
+        programs_service.programs_repo, "get_program", lambda *a, **k: source
+    )
+    duplicate_mock = MagicMock()
+    monkeypatch.setattr(
+        programs_service.programs_repo, "duplicate_program_tree", duplicate_mock
+    )
+
+    with pytest.raises(programs_service.ProgramAccessDeniedError):
+        programs_service.duplicate_program(
+            MagicMock(),
+            user_id=OWNER_ID,
+            program_id=PROGRAM_ID,
+            payload=ProgramDuplicateRequest(),
+        )
+    duplicate_mock.assert_not_called()

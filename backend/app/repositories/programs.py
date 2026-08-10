@@ -4,7 +4,12 @@ from typing import Any
 from sqlmodel import Session, select
 
 from app.models.enums import ProgressionType, WeightUnit
+from app.models.exercise_prescription import ExercisePrescription
 from app.models.program import Program
+from app.models.progression_line import ProgressionLine
+from app.models.training_week import TrainingWeek
+from app.models.workout_session import WorkoutSession
+from app.repositories import training_weeks as training_weeks_repo
 
 
 def create_program(
@@ -157,3 +162,148 @@ def delete_program(session: Session, program: Program) -> None:
     """
     session.delete(program)
     session.commit()
+
+
+def duplicate_program_tree(session: Session, *, source: Program, name: str) -> Program:
+    """Deep-copy `source`'s planning tree (weeks -> sessions -> prescriptions) and its
+    ProgressionLines into a brand new, independent Program. No ExercisePerformance rows
+    are ever copied — a duplicate is a new plan, not a copy of training history.
+
+    One transaction, single commit at the end: a partially-committed duplicate would be
+    a corrupt program the user would have to hunt down and delete by hand, and per-row
+    commits would mean hundreds of round trips for a multi-week program.
+    """
+    # 1. Read the source tree in flat queries, not by lazy-loading per row.
+    weeks = training_weeks_repo.list_training_weeks_for_program(session, source.id)
+    week_ids = [week.id for week in weeks]
+
+    sessions: list[WorkoutSession] = []
+    if week_ids:
+        sessions = list(
+            session.exec(
+                select(WorkoutSession)
+                .where(WorkoutSession.week_id.in_(week_ids))  # type: ignore[attr-defined]
+                .order_by(WorkoutSession.week_id, WorkoutSession.order_index)  # type: ignore[union-attr]
+            ).all()
+        )
+    session_ids = [workout_session.id for workout_session in sessions]
+
+    prescriptions: list[ExercisePrescription] = []
+    if session_ids:
+        prescriptions = list(
+            session.exec(
+                select(ExercisePrescription)
+                .where(ExercisePrescription.workout_session_id.in_(session_ids))  # type: ignore[attr-defined]
+                .order_by(
+                    ExercisePrescription.workout_session_id,
+                    ExercisePrescription.order_index,  # type: ignore[arg-type]
+                )
+            ).all()
+        )
+
+    lines = list(
+        session.exec(
+            select(ProgressionLine).where(ProgressionLine.program_id == source.id)
+        ).all()
+    )
+
+    # 2. Create the new Program, always inactive/unarchived regardless of source state.
+    new_program = Program(
+        user_id=source.user_id,
+        name=name,
+        description=source.description,
+        start_date=None,
+        end_date=None,
+        is_active=False,
+        weight_unit=source.weight_unit,
+        default_progression_type=source.default_progression_type,
+        default_progression_params=(
+            dict(source.default_progression_params)
+            if source.default_progression_params is not None
+            else None
+        ),
+        archived_at=None,
+    )
+    session.add(new_program)
+    session.flush()
+
+    # 3. Copy every ProgressionLine, explicitly — ProgressionLine deliberately has no
+    # ORM Relationship in either direction (see its model docstring), so nothing here
+    # is wired by cascade. Copy all source lines, not only currently-referenced ones.
+    new_lines = [
+        ProgressionLine(
+            program_id=new_program.id,
+            exercise_id=line.exercise_id,
+            is_default=line.is_default,
+            label=line.label,
+        )
+        for line in lines
+    ]
+    session.add_all(new_lines)
+    session.flush()
+    line_id_map: dict[int, int] = {
+        line.id: new_line.id for line, new_line in zip(lines, new_lines)
+    }
+
+    # 4. Build weeks -> sessions -> prescriptions, flushing once per level (not once
+    # per row) to obtain parent ids — SQLAlchemy populates PKs on every pending
+    # object at the first flush after add(), so one flush per level is enough.
+    new_weeks = [
+        TrainingWeek(
+            program_id=new_program.id,
+            week_number=week.week_number,
+            name=week.name,
+        )
+        for week in weeks
+    ]
+    session.add_all(new_weeks)
+    session.flush()
+    week_id_map: dict[int, int] = {
+        week.id: new_week.id for week, new_week in zip(weeks, new_weeks)
+    }
+
+    new_sessions = [
+        WorkoutSession(
+            week_id=week_id_map[workout_session.week_id],
+            day_name=workout_session.day_name,
+            order_index=workout_session.order_index,
+            started_at=None,
+            completed_at=None,
+            notes=None,
+        )
+        for workout_session in sessions
+    ]
+    session.add_all(new_sessions)
+    session.flush()
+    session_id_map: dict[int, int] = {
+        workout_session.id: new_session.id
+        for workout_session, new_session in zip(sessions, new_sessions)
+    }
+
+    for prescription in prescriptions:
+        new_prescription = ExercisePrescription(
+            workout_session_id=session_id_map[prescription.workout_session_id],
+            exercise_id=prescription.exercise_id,
+            progression_line_id=line_id_map[prescription.progression_line_id],
+            order_index=prescription.order_index,
+            target_sets=prescription.target_sets,
+            target_reps=prescription.target_reps,
+            target_weight=prescription.target_weight,
+            target_rpe=prescription.target_rpe,
+            progression_type=prescription.progression_type,
+            progression_params=(
+                dict(prescription.progression_params)
+                if prescription.progression_params is not None
+                else None
+            ),
+            notes=prescription.notes,
+        )
+        session.add(new_prescription)
+
+    # 5. prescription.performances is never traversed — no ExercisePerformance rows
+    # are created for the duplicate.
+
+    # 6. Single commit at the end.
+    session.commit()
+    session.refresh(new_program)
+    return new_program

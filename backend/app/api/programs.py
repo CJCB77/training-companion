@@ -4,7 +4,12 @@ from sqlmodel import Session
 from app.api.dependencies import get_current_user
 from app.core.database import get_session
 from app.models.profile import Profile
-from app.schemas.programs import ProgramCreate, ProgramRead, ProgramUpdate
+from app.schemas.programs import (
+    ProgramCreate,
+    ProgramDuplicateRequest,
+    ProgramRead,
+    ProgramUpdate,
+)
 from app.services import programs as programs_service
 
 router = APIRouter(prefix="/programs", tags=["programs"])
@@ -102,6 +107,31 @@ def unarchive_program(
     try:
         return programs_service.unarchive_program(
             session, user_id=current_user.id, program_id=program_id
+        )
+    except (
+        programs_service.ProgramNotFoundError,
+        programs_service.ProgramAccessDeniedError,
+    ) as exc:
+        raise _not_found() from exc
+
+
+@router.post(
+    "/{program_id}/duplicate",
+    response_model=ProgramRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def duplicate_program(
+    program_id: int,
+    payload: ProgramDuplicateRequest = ProgramDuplicateRequest(),
+    current_user: Profile = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> ProgramRead:
+    try:
+        return programs_service.duplicate_program(
+            session,
+            user_id=current_user.id,
+            program_id=program_id,
+            payload=payload,
         )
     except (
         programs_service.ProgramNotFoundError,

@@ -7,7 +7,7 @@ from sqlmodel import Session
 
 from app.models.program import Program
 from app.repositories import programs as programs_repo
-from app.schemas.programs import ProgramCreate, ProgramUpdate
+from app.schemas.programs import ProgramCreate, ProgramDuplicateRequest, ProgramUpdate
 
 
 class ProgramNotFoundError(Exception):
@@ -102,3 +102,21 @@ def unarchive_program(session: Session, *, user_id: int, program_id: int) -> Pro
 def delete_program(session: Session, *, user_id: int, program_id: int) -> None:
     program = get_owned_program(session, user_id=user_id, program_id=program_id)
     programs_repo.delete_program(session, program)
+
+
+def duplicate_program(
+    session: Session,
+    *,
+    user_id: int,
+    program_id: int,
+    payload: ProgramDuplicateRequest,
+) -> Program:
+    """Deep-copy a program the caller owns into a new, independent one.
+
+    Deliberately does not call deactivate_other_active_programs: the copy is always
+    created inactive, so TRAIN-10's single-active invariant holds by construction
+    rather than by mutating the user's other programs.
+    """
+    source = get_owned_program(session, user_id=user_id, program_id=program_id)
+    name = payload.name or f"{source.name} (Copy)"
+    return programs_repo.duplicate_program_tree(session, source=source, name=name)
