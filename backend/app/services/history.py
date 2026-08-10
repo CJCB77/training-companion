@@ -262,7 +262,12 @@ def detect_new_records(
 # --------------------------------------------------------------------------
 
 
-def _row_to_record(row: tuple) -> PerformanceRecord:
+def row_to_record(row: tuple) -> PerformanceRecord:
+    """Public (not underscore-prefixed): reused as-is by
+    `app/services/dashboard.py` (TRAIN-22) rather than duplicated — same
+    row shape `history_repo.list_weighted_performances_for_exercise`/
+    `list_weighted_performances_for_exercises` both return.
+    """
     (
         weight,
         reps,
@@ -313,7 +318,7 @@ def _value_and_comparison_kg(
     return effort.one_rm, effort.one_rm_kg  # type: ignore[return-value]
 
 
-def _personal_record_read(
+def personal_record_read(
     *,
     exercise_id: int,
     exercise_name: str,
@@ -321,6 +326,10 @@ def _personal_record_read(
     effort: Effort,
     display_unit: WeightUnit,
 ) -> PersonalRecordRead:
+    """Public (not underscore-prefixed): reused as-is by
+    `app/services/dashboard.py` (TRAIN-22) so a PR hit is built into exactly
+    one `PersonalRecordRead` shape everywhere, never a second implementation.
+    """
     value, comparison_kg = _value_and_comparison_kg(effort, kind=kind)
     return PersonalRecordRead(
         exercise_id=exercise_id,
@@ -419,14 +428,14 @@ def get_personal_records(
     rows = history_repo.list_weighted_performances_for_exercise(
         session, user_id=user_id, exercise_id=exercise_id
     )
-    best = best_effort([_row_to_record(row) for row in rows])
+    best = best_effort([row_to_record(row) for row in rows])
     if best is None:
         return []
 
     results: list[PersonalRecordRead] = []
     if best.best_weight is not None:
         results.append(
-            _personal_record_read(
+            personal_record_read(
                 exercise_id=exercise_id,
                 exercise_name=exercise.name,
                 kind=PersonalRecordKind.HEAVIEST_WEIGHT,
@@ -436,7 +445,7 @@ def get_personal_records(
         )
     if best.best_one_rm is not None:
         results.append(
-            _personal_record_read(
+            personal_record_read(
                 exercise_id=exercise_id,
                 exercise_name=exercise.name,
                 kind=PersonalRecordKind.BEST_ESTIMATED_ONE_RM,
@@ -481,7 +490,7 @@ def get_session_personal_records(
         rows = history_repo.list_weighted_performances_for_exercise(
             session, user_id=user_id, exercise_id=exercise_id
         )
-        records = [_row_to_record(row) for row in rows]
+        records = [row_to_record(row) for row in rows]
         prior_records = [
             r for r in records if r.performed_at < workout_session.completed_at
         ]
@@ -494,7 +503,7 @@ def get_session_personal_records(
         )
         for hit in hits:
             results.append(
-                _personal_record_read(
+                personal_record_read(
                     exercise_id=exercise_id,
                     exercise_name=exercise_name,
                     kind=hit.kind,
@@ -533,7 +542,7 @@ def get_one_rm_trend(
     rows = history_repo.list_weighted_performances_for_exercise(
         session, user_id=user_id, exercise_id=exercise_id
     )
-    records = [_row_to_record(row) for row in rows]
+    records = [row_to_record(row) for row in rows]
     if program_id is not None:
         records = [r for r in records if r.program_id == program_id]
 
