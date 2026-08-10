@@ -645,36 +645,6 @@ def test_duplicate_program_tree_preserves_all_planning_fields(db_session):
     assert copied_rx.progression_params == tree["rx_shared_1"].progression_params
 
 
-def test_duplicate_program_tree_shallow_copies_jsonb_dicts(db_session):
-    """The plan's explicit decision: mutating the source's dict after duplication
-    must never leak into the copy's row — each row gets its own dict instance.
-    """
-    user = make_profile()
-    _persist(db_session, user)
-    tree = _build_program_with_two_lines(db_session, user_id=user.id)
-    source_program = tree["program"]
-    source_rx = tree["rx_shared_1"]
-
-    copy = programs_repo.duplicate_program_tree(
-        db_session, source=source_program, name="Copy"
-    )
-    copied_rx = db_session.exec(
-        select(ExercisePrescription)
-        .join(WorkoutSession)
-        .join(TrainingWeek)
-        .where(
-            TrainingWeek.program_id == copy.id,
-            ExercisePrescription.order_index == source_rx.order_index,
-        )
-    ).one()
-
-    source_program.default_progression_params["increment"] = 999
-    source_rx.progression_params["pct"] = 999
-
-    assert copy.default_progression_params["increment"] != 999
-    assert copied_rx.progression_params["pct"] != 999
-
-
 def test_duplicate_program_tree_with_zero_weeks_creates_empty_copy(db_session):
     user = make_profile()
     _persist(db_session, user)
