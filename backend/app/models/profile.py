@@ -20,7 +20,11 @@ class Profile(SQLModel, table=True):
     email: str
     name: str | None = None
     # Default unit applied to new programs the user creates. Authoritative unit lives
-    # on each Program (Program.weight_unit).
+    # on each Program (Program.weight_unit). Also doubles as the analytics *display*
+    # unit (see app/services/history.py): lifetime PRs and the e1RM trend can span
+    # programs run in different units, so those read-only endpoints convert every
+    # value to this unit for a single consistent ordering/axis — the one place in
+    # the codebase that reintroduces cross-unit conversion (see TRAIN-21).
     default_weight_unit: WeightUnit = Field(
         sa_column=sa.Column(sa.String, nullable=False, server_default=WeightUnit.KG)
     )
