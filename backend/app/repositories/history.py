@@ -9,6 +9,7 @@ Python only, never duplicated as a SQL expression."
 from sqlmodel import Session, select
 
 from app.models.enums import SetCompletionState
+from app.models.exercise import Exercise
 from app.models.exercise_performance import ExercisePerformance
 from app.models.exercise_prescription import ExercisePrescription
 from app.models.program import Program
@@ -125,6 +126,69 @@ def list_weighted_performances_for_exercise(
         .order_by(
             WorkoutSession.completed_at.desc(),  # type: ignore[union-attr]
             WorkoutSession.id.desc(),  # type: ignore[union-attr]
+            ExercisePerformance.id,  # type: ignore[arg-type]
+        )
+    )
+    return list(session.exec(statement).all())
+
+
+def list_weighted_performances_for_exercises(
+    session: Session, *, user_id: int, exercise_ids: list[int]
+) -> list[tuple]:
+    """Batched sibling of `list_weighted_performances_for_exercise` — TRAIN-22's
+    dashboard needs the lifetime history of several exercises trained in the
+    recent window, and looping the singular query once per exercise would be an
+    N+1. Same "counted set" rules as the singular query.
+
+    Two differences from the singular query's row shape, both a consequence of
+    covering more than one exercise per call: `ExercisePrescription.exercise_id`
+    and `Exercise.name` are added so the caller can group rows back out per
+    exercise, and rows come back **oldest first** (`completed_at` ascending)
+    rather than newest first — TRAIN-22's fold walks each exercise's history
+    chronologically to detect PRs and the trend delta, rather than doing the
+    single "reduce to one best" pass the singular query's callers use.
+
+    Returns `(exercise_id, exercise_name, actual_weight, actual_reps,
+    weight_unit, completed_at, workout_session_id, program_id,
+    progression_line_id)` rows. `[]` for an empty `exercise_ids` — no query
+    executes.
+    """
+    if not exercise_ids:
+        return []
+    statement = (
+        select(
+            ExercisePrescription.exercise_id,
+            Exercise.name,
+            ExercisePerformance.actual_weight,
+            ExercisePerformance.actual_reps,
+            Program.weight_unit,
+            WorkoutSession.completed_at,
+            WorkoutSession.id,
+            Program.id,
+            ExercisePrescription.progression_line_id,
+        )
+        .join(
+            ExercisePrescription,
+            ExercisePerformance.prescription_id == ExercisePrescription.id,  # type: ignore[arg-type]
+        )
+        .join(Exercise, ExercisePrescription.exercise_id == Exercise.id)  # type: ignore[arg-type]
+        .join(
+            WorkoutSession,
+            ExercisePrescription.workout_session_id == WorkoutSession.id,  # type: ignore[arg-type]
+        )
+        .join(TrainingWeek, WorkoutSession.week_id == TrainingWeek.id)  # type: ignore[arg-type]
+        .join(Program, TrainingWeek.program_id == Program.id)  # type: ignore[arg-type]
+        .where(
+            Program.user_id == user_id,
+            ExercisePrescription.exercise_id.in_(exercise_ids),  # type: ignore[attr-defined]
+            WorkoutSession.completed_at.is_not(None),  # type: ignore[union-attr]
+            ExercisePerformance.actual_weight.is_not(None),  # type: ignore[union-attr]
+            ExercisePerformance.actual_reps >= 1,
+            ExercisePerformance.completion_state.in_(_COUNTED_STATES),  # type: ignore[attr-defined]
+        )
+        .order_by(
+            WorkoutSession.completed_at,  # type: ignore[union-attr]
+            WorkoutSession.id,  # type: ignore[union-attr]
             ExercisePerformance.id,  # type: ignore[arg-type]
         )
     )
