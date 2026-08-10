@@ -178,10 +178,18 @@ def best_effort(records: list[PerformanceRecord]) -> BestEffort | None:
     `None` for an empty input; every counted record has a computable e1RM (a
     `PerformanceRecord` never carries `reps < 1`), so `best_one_rm` is only
     `None` when `records` is empty.
+
+    Deterministic regardless of the caller's input order: records are sorted
+    oldest-first before reducing, so a tie (the same weight or e1RM hit more
+    than once) is resolved in favor of the *earliest* occurrence — "heaviest
+    weight ever" means the first time that weight was reached, not the most
+    recent repeat of it. `max()` returns the first maximal element it sees on
+    a tie, which is what makes the oldest-first sort do the tie-breaking.
     """
     if not records:
         return None
-    efforts = [_to_effort(r) for r in records]
+    ordered = sorted(records, key=lambda r: (r.performed_at, r.workout_session_id))
+    efforts = [_to_effort(r) for r in ordered]
     best_weight = max(efforts, key=lambda e: e.weight_kg)
     one_rm_efforts = [e for e in efforts if e.one_rm_kg is not None]
     best_one_rm = (
@@ -263,6 +271,36 @@ def _row_to_record(row: tuple) -> PerformanceRecord:
     )
 
 
+def _display_value(
+    *, value: float, comparison_kg: float, unit: WeightUnit, display_unit: WeightUnit
+) -> float:
+    """The 2dp display-unit figure. Short-circuits to rounding `value` directly
+    when no conversion is needed, so the no-conversion case (the common one —
+    both values logged in the same unit) never round-trips through kg at all,
+    matching the "as-performed `value` is returned exactly as logged, never
+    round-tripped through kg" rule for `value` itself.
+    """
+    if unit == display_unit:
+        return round(value, 2)
+    return round(from_kg(comparison_kg, display_unit), 2)
+
+
+def _value_and_comparison_kg(
+    effort: Effort, *, kind: PersonalRecordKind
+) -> tuple[float, float]:
+    """The as-logged figure and its kg comparison value for one PR kind. Shared
+    by both `_read` builders below so the `HEAVIEST_WEIGHT` vs.
+    `BEST_ESTIMATED_ONE_RM` branch is written once.
+    """
+    if kind == PersonalRecordKind.HEAVIEST_WEIGHT:
+        return effort.weight, effort.weight_kg
+    # BEST_ESTIMATED_ONE_RM (and the trend point, which is always an e1RM
+    # figure) — effort.one_rm is never None here: it only reaches this branch
+    # via best_effort's best_one_rm (already filtered to non-None) or
+    # detect_new_records' matching hit.
+    return effort.one_rm, effort.one_rm_kg  # type: ignore[return-value]
+
+
 def _personal_record_read(
     *,
     exercise_id: int,
@@ -271,22 +309,19 @@ def _personal_record_read(
     effort: Effort,
     display_unit: WeightUnit,
 ) -> PersonalRecordRead:
-    if kind == PersonalRecordKind.HEAVIEST_WEIGHT:
-        value = effort.weight
-        comparison_kg = effort.weight_kg
-    else:
-        # best_estimated_one_rm — effort.one_rm is never None here: it only
-        # reaches this branch via best_effort's best_one_rm (already filtered
-        # to non-None) or detect_new_records' matching hit.
-        value = effort.one_rm
-        comparison_kg = effort.one_rm_kg
+    value, comparison_kg = _value_and_comparison_kg(effort, kind=kind)
     return PersonalRecordRead(
         exercise_id=exercise_id,
         exercise_name=exercise_name,
         kind=kind,
-        value=value,  # type: ignore[arg-type]
+        value=value,
         recorded_unit=effort.weight_unit,
-        display_value=round(from_kg(comparison_kg, display_unit), 2),  # type: ignore[arg-type]
+        display_value=_display_value(
+            value=value,
+            comparison_kg=comparison_kg,
+            unit=effort.weight_unit,
+            display_unit=display_unit,
+        ),
         display_unit=display_unit,
         converted=effort.weight_unit != display_unit,
         reps=effort.reps,
@@ -300,12 +335,20 @@ def _personal_record_read(
 def _trend_point_read(
     *, exercise_id: int, exercise_name: str, effort: Effort, display_unit: WeightUnit
 ) -> OneRmTrendPointRead:
+    value, comparison_kg = _value_and_comparison_kg(
+        effort, kind=PersonalRecordKind.BEST_ESTIMATED_ONE_RM
+    )
     return OneRmTrendPointRead(
         exercise_id=exercise_id,
         exercise_name=exercise_name,
-        value=effort.one_rm,  # type: ignore[arg-type]
+        value=value,
         recorded_unit=effort.weight_unit,
-        display_value=round(from_kg(effort.one_rm_kg, display_unit), 2),  # type: ignore[arg-type]
+        display_value=_display_value(
+            value=value,
+            comparison_kg=comparison_kg,
+            unit=effort.weight_unit,
+            display_unit=display_unit,
+        ),
         display_unit=display_unit,
         converted=effort.weight_unit != display_unit,
         reps=effort.reps,
@@ -408,17 +451,17 @@ def get_session_personal_records(
     prescriptions = exercise_prescriptions_repo.list_exercise_prescriptions_for_session(
         session, workout_session_id
     )
-    exercise_ids = sorted({p.exercise_id for p in prescriptions})
+    # Names come straight off the already-fetched prescriptions' `exercise`
+    # relationship, not a second `get_visible_exercise` round trip per
+    # exercise — these exercises already belong to the caller's own session,
+    # so the visibility check `get_visible_exercise` exists for is redundant
+    # here.
+    exercise_name_by_id = {p.exercise_id: p.exercise.name for p in prescriptions}
+    exercise_ids = sorted(exercise_name_by_id)
 
     results: list[PersonalRecordRead] = []
     for exercise_id in exercise_ids:
-        exercise = exercises_repo.get_visible_exercise(
-            session, user_id=user_id, exercise_id=exercise_id
-        )
-        if exercise is None:
-            # Defensive: RESTRICT keeps exercises from being deleted out from
-            # under a prescription, so this shouldn't happen in practice.
-            continue
+        exercise_name = exercise_name_by_id[exercise_id]
 
         rows = history_repo.list_weighted_performances_for_exercise(
             session, user_id=user_id, exercise_id=exercise_id
@@ -438,7 +481,7 @@ def get_session_personal_records(
             results.append(
                 _personal_record_read(
                     exercise_id=exercise_id,
-                    exercise_name=exercise.name,
+                    exercise_name=exercise_name,
                     kind=hit.kind,
                     effort=hit.effort,
                     display_unit=display_unit,

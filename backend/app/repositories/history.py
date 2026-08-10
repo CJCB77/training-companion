@@ -30,10 +30,13 @@ def list_completed_sessions(
     offset: int,
 ) -> list[tuple[WorkoutSession, int]]:
     """Completed sessions (`completed_at IS NOT NULL`) the user owns, newest
-    first by `completed_at`, each paired with its `program_id`. Same
-    prescription/session/week/program join chain used throughout this
-    codebase (see `exercise_prescriptions_repo.list_prior_attempts`), minus
-    the prescription hop since sessions don't need it.
+    first by `completed_at` then by `id` (secondary key: `completed_at` alone
+    isn't unique, so same-instant completions still need a deterministic order
+    or pagination can duplicate/skip a row across a page boundary), each paired
+    with its `program_id`. Same prescription/session/week/program join chain
+    used throughout this codebase (see
+    `exercise_prescriptions_repo.list_prior_attempts`), minus the prescription
+    hop since sessions don't need it.
 
     Archived programs are included (data stays fully retained for history —
     see CLAUDE.md's Entity Lifecycle Conventions); deleted ones cascade their
@@ -51,7 +54,10 @@ def list_completed_sessions(
     if program_id is not None:
         statement = statement.where(TrainingWeek.program_id == program_id)
     statement = (
-        statement.order_by(WorkoutSession.completed_at.desc())  # type: ignore[union-attr]
+        statement.order_by(
+            WorkoutSession.completed_at.desc(),  # type: ignore[union-attr]
+            WorkoutSession.id.desc(),  # type: ignore[union-attr]
+        )
         .limit(limit)
         .offset(offset)
     )
@@ -62,7 +68,10 @@ def list_weighted_performances_for_exercise(
     session: Session, *, user_id: int, exercise_id: int
 ) -> list[tuple]:
     """Every counted weighted set logged for `exercise_id`, across **all** of the
-    user's programs (any unit, any progression line), newest session first.
+    user's programs (any unit, any progression line), newest session first —
+    ordered by `completed_at` then by `id` so same-instant sessions still come
+    back in a stable, repeatable order (matters for `best_effort`'s tie-break;
+    see `app/services/history.py`).
 
     "Counted" per TRAIN-21's design plan: session completed, `actual_weight IS
     NOT NULL`, `actual_reps >= 1`, state COMPLETED or FAILED. Bodyweight work
@@ -109,6 +118,9 @@ def list_weighted_performances_for_exercise(
             ExercisePerformance.actual_reps >= 1,
             ExercisePerformance.completion_state.in_(_COUNTED_STATES),  # type: ignore[attr-defined]
         )
-        .order_by(WorkoutSession.completed_at.desc())  # type: ignore[union-attr]
+        .order_by(
+            WorkoutSession.completed_at.desc(),  # type: ignore[union-attr]
+            WorkoutSession.id.desc(),  # type: ignore[union-attr]
+        )
     )
     return list(session.exec(statement).all())
