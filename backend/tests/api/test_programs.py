@@ -282,6 +282,48 @@ def test_delete_program_access_denied_returns_404(authenticated_client, monkeypa
     assert response.status_code == 404
 
 
+def test_duplicate_program_owned_by_caller_returns_201(
+    authenticated_client, current_user, monkeypatch
+):
+    duplicate = _program_read_double(current_user.id)
+    monkeypatch.setattr(
+        programs_service, "duplicate_program", lambda *a, **k: duplicate
+    )
+
+    response = authenticated_client.post(f"/programs/{PROGRAM_ID}/duplicate", json={})
+
+    assert response.status_code == 201
+    assert response.json()["id"] == PROGRAM_ID
+
+
+def test_duplicate_program_not_found_returns_404(authenticated_client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise programs_service.ProgramNotFoundError(PROGRAM_ID)
+
+    monkeypatch.setattr(programs_service, "duplicate_program", _raise)
+
+    response = authenticated_client.post(f"/programs/{PROGRAM_ID}/duplicate", json={})
+
+    assert response.status_code == 404
+
+
+def test_duplicate_program_access_denied_returns_404(authenticated_client, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise programs_service.ProgramAccessDeniedError(PROGRAM_ID)
+
+    monkeypatch.setattr(programs_service, "duplicate_program", _raise)
+
+    response = authenticated_client.post(f"/programs/{PROGRAM_ID}/duplicate", json={})
+
+    assert response.status_code == 404
+
+
+def test_duplicate_program_without_auth_returns_401(client):
+    response = client.post(f"/programs/{PROGRAM_ID}/duplicate", json={})
+
+    assert response.status_code == 401
+
+
 def test_create_program_with_unknown_progression_params_key_returns_422(
     authenticated_client,
 ):

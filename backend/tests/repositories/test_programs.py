@@ -1,8 +1,11 @@
+from datetime import date, datetime, timezone
+
 import pytest
 from sqlmodel import select
 
 from app.models.enums import WeightUnit
 from app.models.exercise import Exercise
+from app.models.exercise_performance import ExercisePerformance
 from app.models.exercise_prescription import ExercisePrescription
 from app.models.progression_line import ProgressionLine
 from app.models.training_week import TrainingWeek
@@ -10,6 +13,7 @@ from app.models.workout_session import WorkoutSession
 from app.repositories import programs as programs_repo
 from tests.factories import (
     make_exercise,
+    make_exercise_performance,
     make_exercise_prescription,
     make_profile,
     make_program,
@@ -312,3 +316,248 @@ def test_delete_program_with_progression_lines_succeeds(db_session):
     assert db_session.exec(select(ExercisePrescription)).all() == []
     assert db_session.exec(select(ProgressionLine)).all() == []
     assert db_session.get(Exercise, exercise.id) is not None
+
+
+def _build_program_with_two_lines(db_session, *, user_id: int, **program_overrides):
+    """A program with one week/session, two ProgressionLines for the same
+    exercise (a heavy-day/light-day split), two prescriptions sharing the first
+    line and one prescription on the second line — the shape the load-bearing
+    line-structure assertions need.
+    """
+    exercise = make_exercise(created_by_user_id=user_id)
+    _persist(db_session, exercise)
+
+    program = make_program(user_id=user_id, **program_overrides)
+    _persist(db_session, program)
+    week = make_training_week(program_id=program.id)
+    _persist(db_session, week)
+    session_day = make_workout_session(
+        week_id=week.id,
+        notes="Felt heavy today",
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+    )
+    _persist(db_session, session_day)
+
+    shared_line = make_progression_line(
+        program_id=program.id,
+        exercise_id=exercise.id,
+        is_default=True,
+        label="Squats A",
+    )
+    separate_line = make_progression_line(
+        program_id=program.id,
+        exercise_id=exercise.id,
+        is_default=False,
+        label="Squats B",
+    )
+    _persist(db_session, shared_line, separate_line)
+
+    rx_shared_1 = make_exercise_prescription(
+        workout_session_id=session_day.id,
+        exercise_id=exercise.id,
+        progression_line_id=shared_line.id,
+        order_index=0,
+        notes="Work up to a heavy triple",
+    )
+    rx_shared_2 = make_exercise_prescription(
+        workout_session_id=session_day.id,
+        exercise_id=exercise.id,
+        progression_line_id=shared_line.id,
+        order_index=1,
+    )
+    rx_separate = make_exercise_prescription(
+        workout_session_id=session_day.id,
+        exercise_id=exercise.id,
+        progression_line_id=separate_line.id,
+        order_index=2,
+    )
+    _persist(db_session, rx_shared_1, rx_shared_2, rx_separate)
+
+    performance = make_exercise_performance(prescription_id=rx_shared_1.id)
+    _persist(db_session, performance)
+
+    return {
+        "program": program,
+        "week": week,
+        "session": session_day,
+        "shared_line": shared_line,
+        "separate_line": separate_line,
+        "rx_shared_1": rx_shared_1,
+        "rx_shared_2": rx_shared_2,
+        "rx_separate": rx_separate,
+    }
+
+
+def test_duplicate_program_tree_preserves_progression_line_structure(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    tree = _build_program_with_two_lines(db_session, user_id=user.id)
+
+    copy = programs_repo.duplicate_program_tree(
+        db_session, source=tree["program"], name="Copy"
+    )
+
+    copied_prescriptions = db_session.exec(
+        select(ExercisePrescription)
+        .join(WorkoutSession)
+        .join(TrainingWeek)
+        .where(TrainingWeek.program_id == copy.id)
+    ).all()
+    by_order = {rx.order_index: rx for rx in copied_prescriptions}
+    assert by_order[0].progression_line_id == by_order[1].progression_line_id
+    assert by_order[0].progression_line_id != by_order[2].progression_line_id
+
+    copied_lines = db_session.exec(
+        select(ProgressionLine).where(ProgressionLine.program_id == copy.id)
+    ).all()
+    assert len(copied_lines) == 2
+    copied_shared_line = db_session.get(
+        ProgressionLine, by_order[0].progression_line_id
+    )
+    copied_separate_line = db_session.get(
+        ProgressionLine, by_order[2].progression_line_id
+    )
+    assert copied_shared_line.is_default is True
+    assert copied_shared_line.label == tree["shared_line"].label
+    assert copied_separate_line.is_default is False
+    assert copied_separate_line.label == tree["separate_line"].label
+
+
+def test_duplicate_program_tree_never_points_a_copied_prescription_at_a_source_line(
+    db_session,
+):
+    user = make_profile()
+    _persist(db_session, user)
+    tree = _build_program_with_two_lines(db_session, user_id=user.id)
+    source_line_ids = {tree["shared_line"].id, tree["separate_line"].id}
+
+    copy = programs_repo.duplicate_program_tree(
+        db_session, source=tree["program"], name="Copy"
+    )
+
+    copied_prescriptions = db_session.exec(
+        select(ExercisePrescription)
+        .join(WorkoutSession)
+        .join(TrainingWeek)
+        .where(TrainingWeek.program_id == copy.id)
+    ).all()
+    assert len(copied_prescriptions) == 3
+    for rx in copied_prescriptions:
+        assert rx.progression_line_id not in source_line_ids
+
+
+def test_duplicate_program_tree_copies_no_exercise_performances(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    tree = _build_program_with_two_lines(db_session, user_id=user.id)
+
+    copy = programs_repo.duplicate_program_tree(
+        db_session, source=tree["program"], name="Copy"
+    )
+
+    copied_performances = db_session.exec(
+        select(ExercisePerformance)
+        .join(ExercisePrescription)
+        .join(WorkoutSession)
+        .join(TrainingWeek)
+        .where(TrainingWeek.program_id == copy.id)
+    ).all()
+    assert copied_performances == []
+
+
+def test_duplicate_program_tree_copy_is_inactive_and_unarchived_when_source_is_active(
+    db_session,
+):
+    user = make_profile()
+    _persist(db_session, user)
+    tree = _build_program_with_two_lines(db_session, user_id=user.id, is_active=True)
+
+    copy = programs_repo.duplicate_program_tree(
+        db_session, source=tree["program"], name="Copy"
+    )
+
+    assert copy.is_active is False
+    assert copy.archived_at is None
+    assert tree["program"].is_active is True
+
+
+def test_duplicate_program_tree_copy_is_unarchived_when_source_is_archived(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    tree = _build_program_with_two_lines(db_session, user_id=user.id)
+    programs_repo.archive_program(db_session, tree["program"])
+    source_archived_at = tree["program"].archived_at
+
+    copy = programs_repo.duplicate_program_tree(
+        db_session, source=tree["program"], name="Copy"
+    )
+
+    assert copy.archived_at is None
+    assert copy.is_active is False
+    assert tree["program"].archived_at == source_archived_at
+
+
+def test_duplicate_program_tree_clears_dates_and_session_execution_state(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    tree = _build_program_with_two_lines(
+        db_session,
+        user_id=user.id,
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 3, 1),
+    )
+
+    copy = programs_repo.duplicate_program_tree(
+        db_session, source=tree["program"], name="Copy"
+    )
+
+    assert copy.start_date is None
+    assert copy.end_date is None
+    copied_session = db_session.exec(
+        select(WorkoutSession)
+        .join(TrainingWeek)
+        .where(TrainingWeek.program_id == copy.id)
+    ).one()
+    assert copied_session.notes is None
+    assert copied_session.started_at is None
+    assert copied_session.completed_at is None
+
+
+def test_duplicate_program_tree_copies_prescription_notes(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    tree = _build_program_with_two_lines(db_session, user_id=user.id)
+
+    copy = programs_repo.duplicate_program_tree(
+        db_session, source=tree["program"], name="Copy"
+    )
+
+    copied_rx_with_notes = db_session.exec(
+        select(ExercisePrescription)
+        .join(WorkoutSession)
+        .join(TrainingWeek)
+        .where(
+            TrainingWeek.program_id == copy.id,
+            ExercisePrescription.order_index == tree["rx_shared_1"].order_index,
+        )
+    ).one()
+    assert copied_rx_with_notes.notes == tree["rx_shared_1"].notes
+
+
+def test_duplicate_program_tree_with_zero_weeks_creates_empty_copy(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    program = make_program(user_id=user.id, name="Empty Program")
+    _persist(db_session, program)
+
+    copy = programs_repo.duplicate_program_tree(db_session, source=program, name="Copy")
+
+    assert copy.id is not None
+    assert copy.name == "Copy"
+    assert (
+        db_session.exec(
+            select(TrainingWeek).where(TrainingWeek.program_id == copy.id)
+        ).all()
+        == []
+    )
