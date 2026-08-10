@@ -50,6 +50,27 @@ def find_visible_exercise_by_name(
     return session.exec(statement).first()
 
 
+def list_system_exercises_by_names(
+    session: Session, names: list[str]
+) -> list[Exercise]:
+    """System exercises (`created_by_user_id IS NULL`) whose name is in `names`.
+
+    Deliberately **not** `find_visible_exercise_by_name`, which is user-scoped and
+    would let a user's own custom exercise (e.g. their own "Squat") shadow the
+    system one — template generation must always resolve against the system
+    catalog, regardless of which user is generating. Case-sensitive exact match:
+    the seed data and `EXERCISE_SEED` names are the two sides of this lookup and
+    are expected to match verbatim.
+    """
+    if not names:
+        return []
+    statement = select(Exercise).where(
+        Exercise.created_by_user_id.is_(None),  # type: ignore[union-attr]
+        col(Exercise.name).in_(names),
+    )
+    return list(session.exec(statement).all())
+
+
 def get_exercise(session: Session, exercise_id: int) -> Exercise | None:
     return session.get(Exercise, exercise_id)
 
