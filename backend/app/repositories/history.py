@@ -69,9 +69,13 @@ def list_weighted_performances_for_exercise(
 ) -> list[tuple]:
     """Every counted weighted set logged for `exercise_id`, across **all** of the
     user's programs (any unit, any progression line), newest session first —
-    ordered by `completed_at` then by `id` so same-instant sessions still come
-    back in a stable, repeatable order (matters for `best_effort`'s tie-break;
-    see `app/services/history.py`).
+    ordered by `WorkoutSession.completed_at`, then `WorkoutSession.id`, then
+    `ExercisePerformance.id`, so both same-instant sessions and same-session
+    sets come back in a stable, repeatable row order. This alone only freezes
+    "whichever set was logged first" as the row order — `best_effort`'s own
+    tie-break keys (see `app/services/history.py`) are what actually decide
+    ties correctly (e.g. 100x5 over 100x3 at equal weight); this ordering
+    just makes that reduction's input reproducible run to run.
 
     "Counted" per TRAIN-21's design plan: session completed, `actual_weight IS
     NOT NULL`, `actual_reps >= 1`, state COMPLETED or FAILED. Bodyweight work
@@ -121,6 +125,7 @@ def list_weighted_performances_for_exercise(
         .order_by(
             WorkoutSession.completed_at.desc(),  # type: ignore[union-attr]
             WorkoutSession.id.desc(),  # type: ignore[union-attr]
+            ExercisePerformance.id,  # type: ignore[arg-type]
         )
     )
     return list(session.exec(statement).all())

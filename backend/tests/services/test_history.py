@@ -188,6 +188,22 @@ def test_best_effort_on_a_tied_weight_picks_the_earliest_occurrence():
         assert result.best_weight.performed_at == earlier_hit.performed_at
 
 
+def test_best_effort_on_a_same_session_weight_tie_prefers_more_reps():
+    # The canonical StrongLifts 5x5 case: every set is 100 kg, but the last
+    # set fails at reduced reps (FAILED sets are counted). All five sets tie
+    # on weight_kg, so without a reps tiebreak the "heaviest weight" PR could
+    # report 100x3 instead of 100x5 depending on row order alone.
+    full_set = _record(weight=100.0, reps=5)
+    failed_set = _record(weight=100.0, reps=3)
+
+    result_full_then_failed = history_service.best_effort([full_set, failed_set])
+    result_failed_then_full = history_service.best_effort([failed_set, full_set])
+
+    for result in (result_full_then_failed, result_failed_then_full):
+        assert result.best_weight.weight == 100.0
+        assert result.best_weight.reps == 5
+
+
 # --------------------------------------------------------------------------
 # detect_new_records
 # --------------------------------------------------------------------------

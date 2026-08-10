@@ -179,21 +179,33 @@ def best_effort(records: list[PerformanceRecord]) -> BestEffort | None:
     `PerformanceRecord` never carries `reps < 1`), so `best_one_rm` is only
     `None` when `records` is empty.
 
-    Deterministic regardless of the caller's input order: records are sorted
-    oldest-first before reducing, so a tie (the same weight or e1RM hit more
-    than once) is resolved in favor of the *earliest* occurrence — "heaviest
-    weight ever" means the first time that weight was reached, not the most
-    recent repeat of it. `max()` returns the first maximal element it sees on
-    a tie, which is what makes the oldest-first sort do the tie-breaking.
+    Deterministic regardless of the caller's input order or row order *within*
+    a session, on two levels:
+
+    - The `max()` sort keys are total, not just the primary (weight_kg /
+      one_rm_kg) figure — `best_weight` breaks ties by `reps` (at equal
+      weight, more reps is the semantically better effort: 100x5 beats
+      100x3), and `best_one_rm` breaks ties by `weight_kg`. This is what
+      makes a same-session tie deterministic (e.g. a 5x5 where the last set
+      fails at reduced reps — `FAILED` sets are counted — leaves every set
+      tied on weight; without the `reps` tiebreak, 100x3 could win over 100x5
+      depending on row order alone).
+    - Records are still sorted oldest-first before reducing, so if two
+      efforts are tied on *both* keys (the same weight and the same reps,
+      logged in different sessions), `max()` — which returns the first
+      maximal element it sees — resolves to the *earliest* occurrence rather
+      than whichever the repository happened to return first.
     """
     if not records:
         return None
     ordered = sorted(records, key=lambda r: (r.performed_at, r.workout_session_id))
     efforts = [_to_effort(r) for r in ordered]
-    best_weight = max(efforts, key=lambda e: e.weight_kg)
+    best_weight = max(efforts, key=lambda e: (e.weight_kg, e.reps))
     one_rm_efforts = [e for e in efforts if e.one_rm_kg is not None]
     best_one_rm = (
-        max(one_rm_efforts, key=lambda e: e.one_rm_kg) if one_rm_efforts else None
+        max(one_rm_efforts, key=lambda e: (e.one_rm_kg, e.weight_kg))
+        if one_rm_efforts
+        else None
     )
     return BestEffort(best_weight=best_weight, best_one_rm=best_one_rm)
 
@@ -451,11 +463,14 @@ def get_session_personal_records(
     prescriptions = exercise_prescriptions_repo.list_exercise_prescriptions_for_session(
         session, workout_session_id
     )
-    # Names come straight off the already-fetched prescriptions' `exercise`
-    # relationship, not a second `get_visible_exercise` round trip per
-    # exercise — these exercises already belong to the caller's own session,
-    # so the visibility check `get_visible_exercise` exists for is redundant
-    # here.
+    # `.exercise` still lazy-loads once per distinct exercise (no eager
+    # loading configured on `list_exercise_prescriptions_for_session`) — this
+    # doesn't remove that query. What it removes is the redundant *visibility*
+    # check `get_visible_exercise` does on top of a plain PK lookup: these
+    # exercises already belong to prescriptions on the caller's own session
+    # (ownership already verified above via `get_owned_workout_session`), and
+    # `exercise_id` is a NOT NULL FK, so there's nothing left for
+    # `get_visible_exercise` to usefully reject here.
     exercise_name_by_id = {p.exercise_id: p.exercise.name for p in prescriptions}
     exercise_ids = sorted(exercise_name_by_id)
 
