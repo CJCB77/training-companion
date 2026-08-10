@@ -254,10 +254,11 @@ def fold_exercise_history(
     `window_start` is inclusive — a session completed exactly at the boundary
     counts as "within the window". Same-`completed_at` sessions break ties by
     `workout_session_id` ascending here (see the sort below), which is one
-    tie-break narrower than `history_service.get_session_personal_records`'s
-    strict `completed_at <` boundary — the two are expected to agree except
-    in the vanishingly unlikely case of two sessions completed at the exact
-    same instant.
+    tie-break broader than `history_service.get_session_personal_records`'s
+    strict `completed_at <` boundary (a same-instant session counts as prior
+    here; it wouldn't there) — the two are expected to agree except in the
+    vanishingly unlikely case of two sessions completed at the exact same
+    instant.
     """
     by_session: dict[int, list[PerformanceRecord]] = defaultdict(list)
     for record in records:

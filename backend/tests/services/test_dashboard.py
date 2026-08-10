@@ -288,6 +288,29 @@ def test_fold_exercise_history_compares_each_in_window_session_against_the_true_
     assert beaten_session_ids == {first.workout_session_id, second.workout_session_id}
 
 
+def test_merge_best_effort_ties_favor_the_earlier_running_effort():
+    # _better_effort's docstring claims ties favor `running` (the earlier
+    # occurrence, by construction of the fold's oldest-first walk) — pin that
+    # invariant directly rather than relying on it only being implied by
+    # fold_exercise_history's higher-level behavior.
+    earlier = _record(
+        weight=100.0, reps=5, performed_at=WINDOW_START, workout_session_id=1
+    )
+    later_tied = _record(
+        weight=100.0,
+        reps=5,
+        performed_at=WINDOW_START + timedelta(days=1),
+        workout_session_id=2,
+    )
+    running = dashboard_service.best_effort([earlier])
+    session_best = dashboard_service.best_effort([later_tied])
+
+    merged = dashboard_service._merge_best_effort(running, session_best)
+
+    assert merged.best_weight.workout_session_id == earlier.workout_session_id
+    assert merged.best_one_rm.workout_session_id == earlier.workout_session_id
+
+
 def test_fold_exercise_history_boundary_timestamp_is_treated_as_in_window():
     on_boundary = _record(
         weight=100.0, reps=5, performed_at=WINDOW_START, workout_session_id=1
