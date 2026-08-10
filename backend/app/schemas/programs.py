@@ -30,6 +30,15 @@ class ProgramUpdate(BaseModel):
     default_progression_params: ProgressionParams | None = None
 
 
+class ProgramDuplicateRequest(BaseModel):
+    """Body for POST /programs/{id}/duplicate. Everything else about the copy is
+    decided by the service/repository — see the duplication design notes on
+    TRAIN-23 for why start_date/end_date and session execution state are cleared.
+    """
+
+    name: str | None = None
+
+
 class ProgramRead(BaseModel):
     model_config = {"from_attributes": True}
 
