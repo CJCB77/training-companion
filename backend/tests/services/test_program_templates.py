@@ -10,6 +10,8 @@ progression-line grouping algorithm, which only exists once ids are assigned by 
 real flush/commit — a mocked repository can't stand in for that.
 """
 
+import copy
+
 import pytest
 from sqlmodel import select
 
@@ -39,22 +41,24 @@ def _exercise_names_in(template: dict) -> set[str]:
     }
 
 
-def _default_line_group_counts(template: dict) -> dict[str, int]:
-    """How many prescription groups with `line_key is None` exist per exercise name,
-    within one template — should never exceed one, matching the DB's own
-    `ix_progression_lines_default_per_program_exercise` partial-unique invariant.
+def _line_labels_by_group(template: dict) -> dict[tuple[str, str | None], set]:
+    """Every distinct `line_label` seen for each `(exercise_name, line_key)` group
+    within one template. A group is what `create_program_from_template_structure`
+    collapses into a single `ProgressionLine` row (see `programs_repo`'s
+    `line_specs` map) — if a group ever carried two different labels, generation
+    would silently keep whichever label it saw first and discard the other. This
+    is the invariant worth guarding in the seed data; "at most one default group
+    per exercise" doesn't need its own test because a `line_key=None` grouping is
+    definitionally a single group by dict-key construction, not something the seed
+    could violate.
     """
-    counts: dict[str, int] = {}
-    seen_default_exercise_names: set[str] = set()
+    labels: dict[tuple[str, str | None], set] = {}
     for week in template["structure"]["weeks"]:
         for session in week["sessions"]:
             for prescription in session["prescriptions"]:
-                if prescription.get("line_key") is None:
-                    name = prescription["exercise_name"]
-                    if name not in seen_default_exercise_names:
-                        seen_default_exercise_names.add(name)
-                        counts[name] = counts.get(name, 0) + 1
-    return counts
+                key = (prescription["exercise_name"], prescription.get("line_key"))
+                labels.setdefault(key, set()).add(prescription.get("line_label"))
+    return labels
 
 
 @pytest.mark.parametrize(
@@ -78,10 +82,10 @@ def test_seed_template_structure_validates_against_template_structure_schema(
 @pytest.mark.parametrize(
     "template", PROGRAM_TEMPLATE_SEED, ids=lambda template: template["slug"]
 )
-def test_seed_template_has_at_most_one_default_line_group_per_exercise(template):
-    counts = _default_line_group_counts(template)
+def test_seed_template_line_groups_never_carry_conflicting_labels(template):
+    label_sets = _line_labels_by_group(template)
 
-    assert all(count <= 1 for count in counts.values())
+    assert all(len(labels) == 1 for labels in label_sets.values())
 
 
 def test_seed_template_slugs_are_unique():
@@ -108,6 +112,37 @@ def test_generate_program_from_template_for_unknown_template_id_raises_not_found
         )
 
 
+def test_generate_program_from_template_raises_when_exercise_name_unresolvable(
+    monkeypatch,
+):
+    """A template's structure referencing an exercise name absent from the system
+    catalog is a seed-integrity bug, not bad client input — see
+    `TemplateExerciseNotFoundError`'s docstring. Simulated here by monkeypatching
+    the exercises-repo lookup to resolve nothing, rather than seeding a genuinely
+    broken template — the seed itself is asserted clean by the seed-integrity
+    tests above.
+    """
+    fake_template = make_program_template(**_stronglifts_seed())
+    monkeypatch.setattr(
+        program_templates_service.program_templates_repo,
+        "get_program_template",
+        lambda *a, **k: fake_template,
+    )
+    monkeypatch.setattr(
+        program_templates_service.exercises_repo,
+        "list_system_exercises_by_names",
+        lambda *a, **k: [],
+    )
+
+    with pytest.raises(program_templates_service.TemplateExerciseNotFoundError):
+        program_templates_service.generate_program_from_template(
+            None,
+            user_id=1,
+            template_id=1,
+            payload=ProgramGenerateRequest(),
+        )
+
+
 def _persist(session, *objs):
     for obj in objs:
         session.add(obj)
@@ -122,7 +157,12 @@ def _seeded_template_data(slug: str) -> dict:
     template = next(
         template for template in PROGRAM_TEMPLATE_SEED if template["slug"] == slug
     )
-    return {**template, "slug": f"test-{slug}"}
+    # deepcopy, not a shallow dict spread: a shallow copy still shares the nested
+    # weeks/sessions/prescriptions lists (and the `structure` dict itself) with the
+    # module-level PROGRAM_TEMPLATE_SEED constant. Since `make_program_template`
+    # hands `structure` straight to the ORM, any in-place mutation a test made to
+    # its own copy would otherwise leak into every other test in the process.
+    return {**copy.deepcopy(template), "slug": f"test-{slug}"}
 
 
 def _stronglifts_seed() -> dict:
@@ -279,7 +319,10 @@ def test_generate_program_from_template_leaves_the_template_row_unchanged(db_ses
     user = make_profile()
     template = make_program_template(**_stronglifts_seed())
     _persist(db_session, user, template)
-    original_structure = dict(template.structure)
+    # deepcopy: a shallow dict() copy still shares the nested weeks/sessions lists
+    # with `template.structure`, so an in-place mutation of those nested lists
+    # would pass this assertion even though the template row was mutated.
+    original_structure = copy.deepcopy(template.structure)
 
     program_templates_service.generate_program_from_template(
         db_session,

@@ -370,6 +370,17 @@ def create_program_from_template_structure(
                 key = (exercise_id, prescription.line_key)
                 if key not in line_specs:
                     line_specs[key] = prescription.line_label
+                elif line_specs[key] != prescription.line_label:
+                    # Two prescriptions in the same (exercise, line_key) group
+                    # disagreeing on the label is a seed-integrity bug: they'd
+                    # collapse onto one ProgressionLine row, and silently keeping
+                    # whichever label was seen first would hide the conflict
+                    # rather than surface it.
+                    raise ValueError(
+                        f"Conflicting line_label for exercise_id={exercise_id} "
+                        f"line_key={prescription.line_key!r}: "
+                        f"{line_specs[key]!r} vs {prescription.line_label!r}"
+                    )
 
     new_lines = [
         ProgressionLine(
