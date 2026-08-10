@@ -33,7 +33,6 @@ from app.repositories import programs as programs_repo
 from app.schemas.dashboard import (
     ActiveProgramRead,
     ConsistencyRead,
-    ConsistencyRollingWindow,
     DashboardRead,
     ExerciseTrendRead,
     NextWorkoutRead,
@@ -43,6 +42,7 @@ from app.schemas.dashboard import (
 from app.schemas.history import PersonalRecordRead
 from app.services.history import (
     BestEffort,
+    Effort,
     PerformanceRecord,
     RecordHit,
     best_effort,
@@ -190,6 +190,48 @@ class ExerciseFold:
     best_before_window: BestEffort | None
 
 
+def _better_effort(
+    running: Effort | None, candidate: Effort | None, *, key
+) -> Effort | None:
+    """Picks the winner between a running best and a new candidate, using
+    `key` (either `best_effort`'s `(weight_kg, reps)` or `(one_rm_kg,
+    weight_kg)` tie-break). Ties favor `running` — by construction it is
+    always the earlier occurrence (sessions are folded oldest-first), matching
+    `best_effort`'s own "earliest occurrence wins ties" rule without needing
+    `performed_at` in the comparison here.
+    """
+    if running is None:
+        return candidate
+    if candidate is None:
+        return running
+    return candidate if key(candidate) > key(running) else running
+
+
+def _merge_best_effort(
+    running: BestEffort | None, session_best: BestEffort | None
+) -> BestEffort | None:
+    """Folds one session's `BestEffort` into the running lifetime best in
+    O(1), so the caller never re-scans accumulated history to know the
+    current best — see `fold_exercise_history`.
+    """
+    if running is None:
+        return session_best
+    if session_best is None:
+        return running
+    return BestEffort(
+        best_weight=_better_effort(
+            running.best_weight,
+            session_best.best_weight,
+            key=lambda e: (e.weight_kg, e.reps),
+        ),
+        best_one_rm=_better_effort(
+            running.best_one_rm,
+            session_best.best_one_rm,
+            key=lambda e: (e.one_rm_kg, e.weight_kg),
+        ),
+    )
+
+
 def fold_exercise_history(
     records: list[PerformanceRecord], *, window_start: datetime
 ) -> ExerciseFold:
@@ -201,8 +243,21 @@ def fold_exercise_history(
     session), and the best-e1RM-in-window / best-e1RM-before-window pair the
     trend delta needs. Pure: no DB, no I/O.
 
+    Genuinely O(records): a running `BestEffort` is carried forward and
+    merged with each session's own `BestEffort` in O(1)
+    (`_merge_best_effort`), rather than re-running `best_effort` over the
+    full accumulated history on every session — `best_effort` itself is
+    still called once per session (to reduce that session's own sets), so
+    the total cost is one sort+reduce per session, not one per session over
+    everything seen so far.
+
     `window_start` is inclusive — a session completed exactly at the boundary
-    counts as "within the window".
+    counts as "within the window". Same-`completed_at` sessions break ties by
+    `workout_session_id` ascending here (see the sort below), which is one
+    tie-break narrower than `history_service.get_session_personal_records`'s
+    strict `completed_at <` boundary — the two are expected to agree except
+    in the vanishingly unlikely case of two sessions completed at the exact
+    same instant.
     """
     by_session: dict[int, list[PerformanceRecord]] = defaultdict(list)
     for record in records:
@@ -213,8 +268,8 @@ def fold_exercise_history(
     )
 
     hits: list[RecordHit] = []
-    prior_records: list[PerformanceRecord] = []
     window_records: list[PerformanceRecord] = []
+    running_best: BestEffort | None = None
     best_before_window: BestEffort | None = None
     captured_before_window = False
 
@@ -223,22 +278,24 @@ def fold_exercise_history(
         in_window = session_completed_at >= window_start
 
         if in_window and not captured_before_window:
-            best_before_window = best_effort(prior_records)
+            # running_best still reflects only sessions strictly before this
+            # one — this session's own BestEffort hasn't been merged in yet.
+            best_before_window = running_best
             captured_before_window = True
 
+        session_best = best_effort(session_records)
+
         if in_window:
-            prior_best = best_effort(prior_records)
-            session_best = best_effort(session_records)
-            hits.extend(detect_new_records(session_best, prior_best))
+            hits.extend(detect_new_records(session_best, running_best))
             window_records.extend(session_records)
 
-        prior_records.extend(session_records)
+        running_best = _merge_best_effort(running_best, session_best)
 
     if not captured_before_window:
         # No session ever reached the window — every record predates it.
         # Callers only fold exercises selected for having been trained in the
         # window, so this is defensive rather than expected.
-        best_before_window = best_effort(prior_records)
+        best_before_window = running_best
 
     return ExerciseFold(
         hits=hits,
@@ -292,12 +349,12 @@ def _next_workout_read(session_row: ProgramSessionRow) -> NextWorkoutRead:
     )
 
 
-def _rolling_window_read(
+def _consistency_read(
     *,
     completed_at_last_28_days: list[datetime],
     last_completed_at: datetime | None,
     now: datetime,
-) -> ConsistencyRollingWindow:
+) -> ConsistencyRead:
     seven_day_cutoff = now - timedelta(days=SHORT_WINDOW_DAYS)
     sessions_completed_last_7_days = sum(
         1
@@ -307,7 +364,7 @@ def _rolling_window_read(
     days_since_last_session = (
         (now - last_completed_at).days if last_completed_at is not None else None
     )
-    return ConsistencyRollingWindow(
+    return ConsistencyRead(
         sessions_completed_last_7_days=sessions_completed_last_7_days,
         sessions_completed_last_28_days=len(completed_at_last_28_days),
         days_since_last_session=days_since_last_session,
@@ -329,9 +386,12 @@ def _exercise_trend_read(
         return None
 
     in_window_effort = fold.best_in_window.best_one_rm
+    # one_rm_kg is typed float | None on Effort, but best_effort only ever
+    # populates best_one_rm from efforts whose one_rm_kg is already not None
+    # (see best_effort's one_rm_efforts filter) — never None here in practice.
     best_in_window_display = round(
-        from_kg(in_window_effort.one_rm_kg, display_unit),
-        2,  # type: ignore[arg-type]
+        from_kg(in_window_effort.one_rm_kg, display_unit),  # type: ignore[arg-type]
+        2,
     )
 
     before_effort = (
@@ -343,9 +403,10 @@ def _exercise_trend_read(
         best_before_window_display = None
         delta = None
     else:
+        # Same non-None guarantee as above.
         best_before_window_display = round(
-            from_kg(before_effort.one_rm_kg, display_unit),
-            2,  # type: ignore[arg-type]
+            from_kg(before_effort.one_rm_kg, display_unit),  # type: ignore[arg-type]
+            2,
         )
         delta = round(best_in_window_display - best_before_window_display, 2)
 
@@ -400,14 +461,10 @@ def get_dashboard(
         session, user_id=user_id, since=window_start
     )
     last_completed_at = dashboard_repo.get_last_completed_at(session, user_id=user_id)
-    rolling_window = _rolling_window_read(
+    consistency = _consistency_read(
         completed_at_last_28_days=completed_at_last_28_days,
         last_completed_at=last_completed_at,
         now=now,
-    )
-
-    consistency = ConsistencyRead(
-        program_progress=program_progress, rolling_window=rolling_window
     )
 
     # 4. Distinct exercise ids trained in the recent window.

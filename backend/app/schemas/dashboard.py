@@ -10,10 +10,6 @@ from pydantic import BaseModel
 from app.models.enums import WeightUnit
 from app.schemas.history import PersonalRecordRead
 
-# Re-exported so a client only needs one import for the whole dashboard
-# response — same PR shape TRAIN-21's /history endpoints already return.
-__all__ = ["PersonalRecordRead", "DashboardRead"]
-
 
 class ActiveProgramRead(BaseModel):
     id: int
@@ -54,26 +50,17 @@ class NextWorkoutRead(BaseModel):
     prescription_count: int
 
 
-class ConsistencyRollingWindow(BaseModel):
+class ConsistencyRead(BaseModel):
     """Recency, from `completed_at`. Spans all programs, not just the active
-    one — "am I showing up" isn't a per-program question.
+    one — "am I showing up" isn't a per-program question. This is the
+    rolling-window half of TRAIN-22's design plan, Resolved question 2 —
+    option C; the structural half (sessions completed vs. total) lives at
+    `DashboardRead.program_progress` only, not duplicated here.
     """
 
     sessions_completed_last_7_days: int
     sessions_completed_last_28_days: int
     days_since_last_session: int | None
-
-
-class ConsistencyRead(BaseModel):
-    """Both halves of "consistency" per TRAIN-22's design plan, Resolved
-    question 2 — option C. `program_progress` mirrors the top-level
-    `DashboardRead.program_progress` (same object, `null` under the same
-    condition); it's repeated here so a client rendering "consistency" doesn't
-    need to reach outside this block for either half.
-    """
-
-    program_progress: ProgramProgressRead | None
-    rolling_window: ConsistencyRollingWindow
 
 
 class ExerciseTrendRead(BaseModel):
