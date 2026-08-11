@@ -249,5 +249,14 @@ def generate_next_training_week(
         # The uq_training_week_program_number race — a double-tap. No retry (see
         # design plan): silently retrying would create a second near-identical
         # week, so this surfaces as a 409 instead.
+        #
+        # Unlike update_training_week, this attributes *any* IntegrityError here to
+        # the week_number constraint without checking which column it names. That's
+        # deliberate, not an oversight: every row create_week_from_source writes is
+        # built from an already-valid source tree (FK values copied verbatim from
+        # rows that satisfied the same constraints when the source week was
+        # created), so week_number is the only constraint this call can plausibly
+        # violate — same reasoning create_training_week_for_program's retry loop
+        # already relies on above.
         session.rollback()
         raise DuplicateWeekNumberError(week_number) from exc

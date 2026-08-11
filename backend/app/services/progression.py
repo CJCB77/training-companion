@@ -523,22 +523,32 @@ def get_recommendations_for_prescriptions(
     `build_attempt_history`, `calculate_recommendation` — so no progression logic
     is duplicated. Settings are resolved per prescription, not per line, because
     `progression_params` can be overridden per prescription.
+
+    History (`list_prior_attempts` + `build_attempt_history`) is memoized by
+    `(progression_line_id, history_limit)` within one call — a program-scoped
+    line's attempt history is identical regardless of which prescription on that
+    line asks for it, and the same line can legitimately appear more than once in
+    a single source week (e.g. StrongLifts Squat on Mon/Wed/Fri), which would
+    otherwise re-run the same query for a provably identical answer.
     """
+    history_cache: dict[tuple[int, int], list[AttemptOutcome]] = {}
     results: dict[int, RecommendationResult] = {}
     for prescription in prescriptions:
         settings = resolve_settings(prescription=prescription, program=program)
         history_limit = settings.deload.failure_threshold + _HISTORY_BUFFER
-        prior_rows = exercise_prescriptions_repo.list_prior_attempts(
-            session,
-            program_id=program.id,
-            exercise_id=prescription.exercise_id,
-            progression_line_id=prescription.progression_line_id,
-            limit=history_limit,
-        )
-        prior_attempts = build_attempt_history(prior_rows)
+        cache_key = (prescription.progression_line_id, history_limit)
+        if cache_key not in history_cache:
+            prior_rows = exercise_prescriptions_repo.list_prior_attempts(
+                session,
+                program_id=program.id,
+                exercise_id=prescription.exercise_id,
+                progression_line_id=prescription.progression_line_id,
+                limit=history_limit,
+            )
+            history_cache[cache_key] = build_attempt_history(prior_rows)
         results[prescription.id] = calculate_recommendation(
             target_weight=prescription.target_weight,
-            prior_attempts=prior_attempts,
+            prior_attempts=history_cache[cache_key],
             settings=settings,
         )
     return results
