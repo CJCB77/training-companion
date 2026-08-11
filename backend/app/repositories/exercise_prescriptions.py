@@ -81,6 +81,27 @@ def list_exercise_prescriptions_for_session(
     return list(session.exec(statement).all())
 
 
+def list_exercise_prescriptions_for_sessions(
+    session: Session, session_ids: list[int]
+) -> list[ExercisePrescription]:
+    """Flat `in_()` read across multiple sessions, ordered
+    `workout_session_id, order_index` — same shape `programs_repo.duplicate_program_tree`
+    already uses for its prescriptions read. Empty input short-circuits to an empty
+    result rather than emitting a query with an empty `IN (...)`.
+    """
+    if not session_ids:
+        return []
+    statement = (
+        select(ExercisePrescription)
+        .where(ExercisePrescription.workout_session_id.in_(session_ids))  # type: ignore[attr-defined]
+        .order_by(
+            ExercisePrescription.workout_session_id,
+            ExercisePrescription.order_index,  # type: ignore[arg-type]
+        )
+    )
+    return list(session.exec(statement).all())
+
+
 def get_max_order_index(session: Session, workout_session_id: int) -> int | None:
     return session.exec(
         select(ExercisePrescription.order_index)

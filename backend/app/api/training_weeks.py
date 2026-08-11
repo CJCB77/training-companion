@@ -6,6 +6,7 @@ from app.core.database import get_session
 from app.models.profile import Profile
 from app.schemas.training_weeks import (
     TrainingWeekCreate,
+    TrainingWeekGenerateRequest,
     TrainingWeekRead,
     TrainingWeekUpdate,
 )
@@ -117,6 +118,30 @@ def update_training_week(
         raise _duplicate_week_number() from exc
     except training_weeks_service.InvalidTrainingWeekUpdateError as exc:
         raise _invalid_update(str(exc)) from exc
+
+
+@router.post(
+    "/training-weeks/{week_id}/generate-next",
+    response_model=TrainingWeekRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def generate_next_training_week(
+    week_id: int,
+    payload: TrainingWeekGenerateRequest = TrainingWeekGenerateRequest(),
+    current_user: Profile = Depends(get_current_user),
+    db_session: Session = Depends(get_session),
+) -> TrainingWeekRead:
+    try:
+        return training_weeks_service.generate_next_training_week(
+            db_session, user_id=current_user.id, week_id=week_id, payload=payload
+        )
+    except (
+        training_weeks_service.TrainingWeekNotFoundError,
+        training_weeks_service.TrainingWeekAccessDeniedError,
+    ) as exc:
+        raise _week_not_found() from exc
+    except training_weeks_service.DuplicateWeekNumberError as exc:
+        raise _duplicate_week_number() from exc
 
 
 @router.delete("/training-weeks/{week_id}", status_code=status.HTTP_204_NO_CONTENT)

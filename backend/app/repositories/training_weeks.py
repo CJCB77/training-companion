@@ -2,8 +2,10 @@ from typing import Any
 
 from sqlmodel import Session, select
 
+from app.models.exercise_prescription import ExercisePrescription
 from app.models.program import Program
 from app.models.training_week import TrainingWeek
+from app.models.workout_session import WorkoutSession
 
 
 def create_training_week(
@@ -94,3 +96,73 @@ def delete_training_week(session: Session, week: TrainingWeek) -> None:
     """
     session.delete(week)
     session.commit()
+
+
+def create_week_from_source(
+    session: Session,
+    *,
+    program_id: int,
+    week_number: int,
+    name: str | None,
+    source_sessions: list[WorkoutSession],
+    source_prescriptions: list[ExercisePrescription],
+    target_weight_by_prescription_id: dict[int, float | None],
+) -> TrainingWeek:
+    """Copy `source_sessions`/`source_prescriptions` (already scoped to one source
+    week by the caller) into a brand new `TrainingWeek` under `program_id`.
+
+    Same transaction shape as `programs_repo.duplicate_program_tree`: batched
+    `add_all()`, one `flush()` per tree level to obtain parent ids, a single
+    `commit()` at the end — a partially-committed week would be a corrupt week the
+    user has to hunt down and delete by hand. Unlike that function, no
+    `ProgressionLine` rows are created or remapped: generation stays inside the same
+    program, so every copied prescription's `progression_line_id` is carried forward
+    unchanged. No `ExercisePerformance` rows are ever copied.
+    """
+    new_week = TrainingWeek(program_id=program_id, week_number=week_number, name=name)
+    session.add(new_week)
+    session.flush()
+
+    new_sessions = [
+        WorkoutSession(
+            week_id=new_week.id,
+            day_name=workout_session.day_name,
+            order_index=workout_session.order_index,
+            started_at=None,
+            completed_at=None,
+            notes=None,
+        )
+        for workout_session in source_sessions
+    ]
+    session.add_all(new_sessions)
+    session.flush()
+    session_id_map: dict[int, int] = {
+        workout_session.id: new_session.id
+        for workout_session, new_session in zip(source_sessions, new_sessions)
+    }
+
+    new_prescriptions = [
+        ExercisePrescription(
+            workout_session_id=session_id_map[prescription.workout_session_id],
+            exercise_id=prescription.exercise_id,
+            progression_line_id=prescription.progression_line_id,
+            order_index=prescription.order_index,
+            target_sets=prescription.target_sets,
+            target_reps=prescription.target_reps,
+            target_weight=target_weight_by_prescription_id[prescription.id],
+            target_rpe=prescription.target_rpe,
+            progression_type=prescription.progression_type,
+            progression_params=(
+                dict(prescription.progression_params)
+                if prescription.progression_params is not None
+                else None
+            ),
+            notes=prescription.notes,
+        )
+        for prescription in source_prescriptions
+    ]
+    session.add_all(new_prescriptions)
+
+    session.commit()
+    session.refresh(new_week)
+    return new_week

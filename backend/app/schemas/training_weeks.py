@@ -20,6 +20,15 @@ class TrainingWeekUpdate(BaseModel):
     name: str | None = None
 
 
+class TrainingWeekGenerateRequest(BaseModel):
+    """Body for `POST /training-weeks/{week_id}/generate-next`. `name` defaults to
+    NULL rather than copying the source week's name — carrying over "Week 1" would
+    produce a second week with the same label.
+    """
+
+    name: str | None = None
+
+
 class TrainingWeekRead(BaseModel):
     model_config = {"from_attributes": True}
 
