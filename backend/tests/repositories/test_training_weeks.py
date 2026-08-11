@@ -2,11 +2,17 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
+from app.models.exercise_performance import ExercisePerformance
+from app.models.exercise_prescription import ExercisePrescription
 from app.models.workout_session import WorkoutSession
 from app.repositories import training_weeks as training_weeks_repo
 from tests.factories import (
+    make_exercise,
+    make_exercise_performance,
+    make_exercise_prescription,
     make_profile,
     make_program,
+    make_progression_line,
     make_training_week,
     make_workout_session,
 )
@@ -147,3 +153,208 @@ def test_delete_training_week_cascades_to_its_workout_sessions(db_session):
         session.week_id for session in db_session.exec(select(WorkoutSession)).all()
     }
     assert remaining_session_week_ids == {other_week.id}
+
+
+def _build_source_tree(session):
+    """A source week with two sessions, each carrying a prescription on its own
+    progression line — enough for the session-id map to be exercised with more
+    than one entry (a copy that collapsed everything onto the first session would
+    otherwise pass unnoticed).
+    """
+    user = make_profile()
+    exercise = make_exercise(created_by_user_id=user.id)
+    _persist(session, user, exercise)
+    program = make_program(user_id=user.id)
+    _persist(session, program)
+    week = make_training_week(program_id=program.id, week_number=1)
+    _persist(session, week)
+    line = make_progression_line(program_id=program.id, exercise_id=exercise.id)
+    _persist(session, line)
+
+    monday = make_workout_session(
+        week_id=week.id, day_name="Monday", order_index=0, notes="felt heavy"
+    )
+    wednesday = make_workout_session(
+        week_id=week.id, day_name="Wednesday", order_index=1
+    )
+    _persist(session, monday, wednesday)
+
+    monday_prescription = make_exercise_prescription(
+        workout_session_id=monday.id,
+        exercise_id=exercise.id,
+        progression_line_id=line.id,
+        order_index=0,
+        target_weight=100.0,
+        progression_params={"increment": 2.5},
+        notes="pause squats",
+    )
+    wednesday_prescription = make_exercise_prescription(
+        workout_session_id=wednesday.id,
+        exercise_id=exercise.id,
+        progression_line_id=line.id,
+        order_index=0,
+        target_weight=60.0,
+    )
+    _persist(session, monday_prescription, wednesday_prescription)
+    performance = make_exercise_performance(prescription_id=monday_prescription.id)
+    _persist(session, performance)
+
+    return program, [monday, wednesday], [monday_prescription, wednesday_prescription]
+
+
+def test_create_week_from_source_copies_session_and_prescription_structure(db_session):
+    program, source_sessions, source_prescriptions = _build_source_tree(db_session)
+    target_weights = {
+        source_prescriptions[0].id: 102.5,
+        source_prescriptions[1].id: 62.5,
+    }
+
+    new_week = training_weeks_repo.create_week_from_source(
+        db_session,
+        program_id=program.id,
+        week_number=2,
+        name="Week 2",
+        source_sessions=source_sessions,
+        source_prescriptions=source_prescriptions,
+        target_weight_by_prescription_id=target_weights,
+    )
+
+    assert new_week.week_number == 2
+    assert new_week.name == "Week 2"
+    new_sessions = db_session.exec(
+        select(WorkoutSession)
+        .where(WorkoutSession.week_id == new_week.id)
+        .order_by(WorkoutSession.order_index)
+    ).all()
+    assert [s.day_name for s in new_sessions] == ["Monday", "Wednesday"]
+    assert {s.notes for s in new_sessions} == {None}
+    assert {s.started_at for s in new_sessions} == {None}
+    assert {s.completed_at for s in new_sessions} == {None}
+
+
+def test_create_week_from_source_uses_resolved_target_weights_and_keeps_line_ids(
+    db_session,
+):
+    program, source_sessions, source_prescriptions = _build_source_tree(db_session)
+    target_weights = {
+        source_prescriptions[0].id: 102.5,
+        source_prescriptions[1].id: 62.5,
+    }
+
+    new_week = training_weeks_repo.create_week_from_source(
+        db_session,
+        program_id=program.id,
+        week_number=2,
+        name=None,
+        source_sessions=source_sessions,
+        source_prescriptions=source_prescriptions,
+        target_weight_by_prescription_id=target_weights,
+    )
+
+    new_sessions = db_session.exec(
+        select(WorkoutSession)
+        .where(WorkoutSession.week_id == new_week.id)
+        .order_by(WorkoutSession.order_index)
+    ).all()
+    new_prescriptions = db_session.exec(
+        select(ExercisePrescription)
+        .where(
+            ExercisePrescription.workout_session_id.in_([s.id for s in new_sessions])
+        )
+        .order_by(ExercisePrescription.id)
+    ).all()
+
+    assert {p.target_weight for p in new_prescriptions} == set(target_weights.values())
+    assert all(
+        p.progression_line_id == source_prescriptions[0].progression_line_id
+        for p in new_prescriptions
+    )
+    monday_new_prescription = next(
+        p for p in new_prescriptions if p.notes == "pause squats"
+    )
+    assert monday_new_prescription.target_weight == 102.5
+
+
+def test_create_week_from_source_never_copies_performances(db_session):
+    program, source_sessions, source_prescriptions = _build_source_tree(db_session)
+
+    new_week = training_weeks_repo.create_week_from_source(
+        db_session,
+        program_id=program.id,
+        week_number=2,
+        name=None,
+        source_sessions=source_sessions,
+        source_prescriptions=source_prescriptions,
+        target_weight_by_prescription_id={
+            p.id: p.target_weight for p in source_prescriptions
+        },
+    )
+
+    new_sessions = db_session.exec(
+        select(WorkoutSession).where(WorkoutSession.week_id == new_week.id)
+    ).all()
+    new_prescriptions = db_session.exec(
+        select(ExercisePrescription).where(
+            ExercisePrescription.workout_session_id.in_([s.id for s in new_sessions])
+        )
+    ).all()
+    performances = db_session.exec(
+        select(ExercisePerformance).where(
+            ExercisePerformance.prescription_id.in_([p.id for p in new_prescriptions])
+        )
+    ).all()
+
+    assert performances == []
+
+
+def test_create_week_from_source_shallow_copies_progression_params(db_session):
+    program, source_sessions, source_prescriptions = _build_source_tree(db_session)
+    monday_source = source_prescriptions[0]
+
+    new_week = training_weeks_repo.create_week_from_source(
+        db_session,
+        program_id=program.id,
+        week_number=2,
+        name=None,
+        source_sessions=source_sessions,
+        source_prescriptions=source_prescriptions,
+        target_weight_by_prescription_id={
+            p.id: p.target_weight for p in source_prescriptions
+        },
+    )
+
+    new_sessions = db_session.exec(
+        select(WorkoutSession).where(WorkoutSession.week_id == new_week.id)
+    ).all()
+    new_prescriptions = db_session.exec(
+        select(ExercisePrescription).where(
+            ExercisePrescription.workout_session_id.in_([s.id for s in new_sessions])
+        )
+    ).all()
+    monday_new = next(p for p in new_prescriptions if p.notes == "pause squats")
+
+    monday_new.progression_params["increment"] = 999
+    assert monday_source.progression_params["increment"] == 2.5
+
+
+def test_create_week_from_source_with_no_sessions_produces_empty_week(db_session):
+    user = make_profile()
+    _persist(db_session, user)
+    program = make_program(user_id=user.id)
+    _persist(db_session, program)
+
+    new_week = training_weeks_repo.create_week_from_source(
+        db_session,
+        program_id=program.id,
+        week_number=1,
+        name=None,
+        source_sessions=[],
+        source_prescriptions=[],
+        target_weight_by_prescription_id={},
+    )
+
+    assert new_week.id is not None
+    remaining_sessions = db_session.exec(
+        select(WorkoutSession).where(WorkoutSession.week_id == new_week.id)
+    ).all()
+    assert remaining_sessions == []

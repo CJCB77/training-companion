@@ -10,8 +10,13 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.schemas.training_weeks import TrainingWeekCreate, TrainingWeekUpdate
+from app.schemas.training_weeks import (
+    TrainingWeekCreate,
+    TrainingWeekGenerateRequest,
+    TrainingWeekUpdate,
+)
 from app.services import programs as programs_service
+from app.services import progression as progression_service
 from app.services import training_weeks as training_weeks_service
 from tests.factories import make_training_week
 
@@ -560,5 +565,259 @@ def test_update_training_week_unrelated_integrity_error_propagates(monkeypatch):
             user_id=OWNER_ID,
             week_id=WEEK_ID,
             payload=TrainingWeekUpdate(name="Renamed"),
+        )
+    session.rollback.assert_called_once()
+
+
+# --- generate_next_training_week ---------------------------------------------
+
+SOURCE_PRESCRIPTION_ID = 500
+
+
+def _recommendation(
+    *,
+    action: str = "increase",
+    recommended_weight: float | None = 110.0,
+) -> progression_service.RecommendationResult:
+    return progression_service.RecommendationResult(
+        recommended_weight=recommended_weight,
+        current_weight=100.0,
+        action=action,
+        progression_type=None,
+        consecutive_failures=0,
+        reason="test",
+    )
+
+
+@pytest.mark.parametrize(
+    "action", ["increase", "hold", "deload"], ids=lambda a: f"action_{a}"
+)
+def test_resolve_target_weight_uses_recommended_weight_for_confident_action(action):
+    recommendation = _recommendation(action=action, recommended_weight=110.0)
+
+    result = training_weeks_service._resolve_target_weight(
+        source_target_weight=100.0, recommendation=recommendation
+    )
+
+    assert result == recommendation.recommended_weight
+
+
+@pytest.mark.parametrize("action", ["manual", "no_data", "needs_configuration"])
+def test_resolve_target_weight_falls_back_to_source_for_non_confident_actions(action):
+    recommendation = _recommendation(action=action, recommended_weight=110.0)
+    source_target_weight = 100.0
+
+    result = training_weeks_service._resolve_target_weight(
+        source_target_weight=source_target_weight, recommendation=recommendation
+    )
+
+    assert result == source_target_weight
+
+
+def test_resolve_target_weight_falls_back_when_recommended_weight_is_none():
+    # action="hold" is not itself in the no-confident-number set, but a None
+    # recommended_weight (bodyweight work with no logged weight) must still fall
+    # back rather than blank out a prescribed weight — the defensive guard this
+    # case exists to prove.
+    recommendation = _recommendation(action="hold", recommended_weight=None)
+    source_target_weight = 100.0
+
+    result = training_weeks_service._resolve_target_weight(
+        source_target_weight=source_target_weight, recommendation=recommendation
+    )
+
+    assert result == source_target_weight
+
+
+def _generate_setup(monkeypatch, *, week, program, prescriptions, recommendations):
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "get_training_week_with_owner",
+        lambda *a, **k: (week, OWNER_ID),
+    )
+    monkeypatch.setattr(programs_service, "get_owned_program", lambda *a, **k: program)
+    monkeypatch.setattr(
+        training_weeks_service.workout_sessions_repo,
+        "list_workout_sessions_for_week",
+        lambda *a, **k: [],
+    )
+    monkeypatch.setattr(
+        training_weeks_service.exercise_prescriptions_repo,
+        "list_exercise_prescriptions_for_sessions",
+        lambda *a, **k: prescriptions,
+    )
+    monkeypatch.setattr(
+        training_weeks_service.progression_service,
+        "get_recommendations_for_prescriptions",
+        lambda *a, **k: recommendations,
+    )
+
+
+def test_generate_next_training_week_for_missing_week_raises_not_found(monkeypatch):
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "get_training_week_with_owner",
+        lambda *a, **k: None,
+    )
+
+    with pytest.raises(training_weeks_service.TrainingWeekNotFoundError):
+        training_weeks_service.generate_next_training_week(
+            MagicMock(),
+            user_id=OWNER_ID,
+            week_id=WEEK_ID,
+            payload=TrainingWeekGenerateRequest(),
+        )
+
+
+def test_generate_next_training_week_for_other_users_week_raises_access_denied(
+    monkeypatch,
+):
+    week = _week()
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "get_training_week_with_owner",
+        lambda *a, **k: (week, OTHER_USER_ID),
+    )
+
+    with pytest.raises(training_weeks_service.TrainingWeekAccessDeniedError):
+        training_weeks_service.generate_next_training_week(
+            MagicMock(),
+            user_id=OWNER_ID,
+            week_id=WEEK_ID,
+            payload=TrainingWeekGenerateRequest(),
+        )
+
+
+def test_generate_next_training_week_computes_week_number_as_max_plus_one(
+    monkeypatch,
+):
+    week = _week()
+    program = MagicMock(id=PROGRAM_ID)
+    _generate_setup(
+        monkeypatch, week=week, program=program, prescriptions=[], recommendations={}
+    )
+    existing_max_week_number = 4
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "get_max_week_number",
+        lambda *a, **k: existing_max_week_number,
+    )
+    create_mock = MagicMock(
+        return_value=_week(week_number=existing_max_week_number + 1)
+    )
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "create_week_from_source",
+        create_mock,
+    )
+
+    training_weeks_service.generate_next_training_week(
+        MagicMock(),
+        user_id=OWNER_ID,
+        week_id=WEEK_ID,
+        payload=TrainingWeekGenerateRequest(),
+    )
+
+    _, called_kwargs = create_mock.call_args
+    assert called_kwargs["week_number"] == existing_max_week_number + 1
+
+
+def test_generate_next_training_week_defaults_week_number_to_one_for_first_week(
+    monkeypatch,
+):
+    week = _week()
+    program = MagicMock(id=PROGRAM_ID)
+    _generate_setup(
+        monkeypatch, week=week, program=program, prescriptions=[], recommendations={}
+    )
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "get_max_week_number",
+        lambda *a, **k: None,
+    )
+    create_mock = MagicMock(return_value=_week(week_number=1))
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "create_week_from_source",
+        create_mock,
+    )
+
+    training_weeks_service.generate_next_training_week(
+        MagicMock(),
+        user_id=OWNER_ID,
+        week_id=WEEK_ID,
+        payload=TrainingWeekGenerateRequest(),
+    )
+
+    _, called_kwargs = create_mock.call_args
+    assert called_kwargs["week_number"] == 1
+
+
+def test_generate_next_training_week_builds_target_weights_from_recommendations(
+    monkeypatch,
+):
+    week = _week()
+    program = MagicMock(id=PROGRAM_ID)
+    prescription = MagicMock(id=SOURCE_PRESCRIPTION_ID, target_weight=100.0)
+    recommendation = _recommendation(action="increase", recommended_weight=102.5)
+    _generate_setup(
+        monkeypatch,
+        week=week,
+        program=program,
+        prescriptions=[prescription],
+        recommendations={SOURCE_PRESCRIPTION_ID: recommendation},
+    )
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "get_max_week_number",
+        lambda *a, **k: None,
+    )
+    create_mock = MagicMock(return_value=_week())
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "create_week_from_source",
+        create_mock,
+    )
+
+    training_weeks_service.generate_next_training_week(
+        MagicMock(),
+        user_id=OWNER_ID,
+        week_id=WEEK_ID,
+        payload=TrainingWeekGenerateRequest(name="Week 2"),
+    )
+
+    _, called_kwargs = create_mock.call_args
+    assert called_kwargs["target_weight_by_prescription_id"] == {
+        SOURCE_PRESCRIPTION_ID: recommendation.recommended_weight
+    }
+    assert called_kwargs["name"] == "Week 2"
+
+
+def test_generate_next_training_week_race_raises_duplicate_and_rolls_back(
+    monkeypatch,
+):
+    week = _week()
+    program = MagicMock(id=PROGRAM_ID)
+    _generate_setup(
+        monkeypatch, week=week, program=program, prescriptions=[], recommendations={}
+    )
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "get_max_week_number",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        training_weeks_service.training_weeks_repo,
+        "create_week_from_source",
+        MagicMock(side_effect=IntegrityError("INSERT", {}, Exception("dup"))),
+    )
+    session = MagicMock()
+
+    with pytest.raises(training_weeks_service.DuplicateWeekNumberError):
+        training_weeks_service.generate_next_training_week(
+            session,
+            user_id=OWNER_ID,
+            week_id=WEEK_ID,
+            payload=TrainingWeekGenerateRequest(),
         )
     session.rollback.assert_called_once()

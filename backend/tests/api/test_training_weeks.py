@@ -250,6 +250,87 @@ def test_delete_training_week_access_denied_returns_404(
     assert response.status_code == 404
 
 
+def test_generate_next_training_week_with_bodyless_post_returns_201(
+    authenticated_client, monkeypatch
+):
+    generated = _week_read_double()
+    monkeypatch.setattr(
+        training_weeks_service, "generate_next_training_week", lambda *a, **k: generated
+    )
+
+    response = authenticated_client.post(f"/training-weeks/{WEEK_ID}/generate-next")
+
+    assert response.status_code == 201
+    assert response.json()["id"] == WEEK_ID
+
+
+def test_generate_next_training_week_honours_optional_name(
+    authenticated_client, monkeypatch
+):
+    generated = _week_read_double(name="Week 2")
+    captured_payload = {}
+
+    def _fake_generate(*args, **kwargs):
+        captured_payload["payload"] = kwargs["payload"]
+        return generated
+
+    monkeypatch.setattr(
+        training_weeks_service, "generate_next_training_week", _fake_generate
+    )
+
+    response = authenticated_client.post(
+        f"/training-weeks/{WEEK_ID}/generate-next", json={"name": "Week 2"}
+    )
+
+    assert response.status_code == 201
+    assert captured_payload["payload"].name == "Week 2"
+
+
+def test_generate_next_training_week_for_missing_week_returns_404(
+    authenticated_client, monkeypatch
+):
+    def _raise(*args, **kwargs):
+        raise training_weeks_service.TrainingWeekNotFoundError(WEEK_ID)
+
+    monkeypatch.setattr(training_weeks_service, "generate_next_training_week", _raise)
+
+    response = authenticated_client.post(f"/training-weeks/{WEEK_ID}/generate-next")
+
+    assert response.status_code == 404
+
+
+def test_generate_next_training_week_for_another_users_week_returns_404(
+    authenticated_client, monkeypatch
+):
+    def _raise(*args, **kwargs):
+        raise training_weeks_service.TrainingWeekAccessDeniedError(WEEK_ID)
+
+    monkeypatch.setattr(training_weeks_service, "generate_next_training_week", _raise)
+
+    response = authenticated_client.post(f"/training-weeks/{WEEK_ID}/generate-next")
+
+    assert response.status_code == 404
+
+
+def test_generate_next_training_week_with_taken_week_number_returns_409(
+    authenticated_client, monkeypatch
+):
+    def _raise(*args, **kwargs):
+        raise training_weeks_service.DuplicateWeekNumberError(2)
+
+    monkeypatch.setattr(training_weeks_service, "generate_next_training_week", _raise)
+
+    response = authenticated_client.post(f"/training-weeks/{WEEK_ID}/generate-next")
+
+    assert response.status_code == 409
+
+
+def test_generate_next_training_week_without_auth_returns_401(client):
+    response = client.post(f"/training-weeks/{WEEK_ID}/generate-next")
+
+    assert response.status_code == 401
+
+
 def test_update_training_week_with_null_week_number_returns_422(
     authenticated_client, monkeypatch
 ):
