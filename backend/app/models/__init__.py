@@ -6,6 +6,7 @@ from app.models.exercise_performance import ExercisePerformance  # noqa: F401
 from app.models.exercise_prescription import ExercisePrescription  # noqa: F401
 from app.models.profile import Profile  # noqa: F401
 from app.models.program import Program  # noqa: F401
+from app.models.program_template import ProgramTemplate  # noqa: F401
 from app.models.progression_line import ProgressionLine  # noqa: F401
 from app.models.training_week import TrainingWeek  # noqa: F401
 from app.models.workout_session import WorkoutSession  # noqa: F401

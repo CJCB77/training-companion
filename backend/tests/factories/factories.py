@@ -22,6 +22,7 @@ from app.models.exercise_performance import ExercisePerformance
 from app.models.exercise_prescription import ExercisePrescription
 from app.models.profile import Profile
 from app.models.program import Program
+from app.models.program_template import ProgramTemplate
 from app.models.progression_line import ProgressionLine
 from app.models.training_week import TrainingWeek
 from app.models.workout_session import WorkoutSession
@@ -63,6 +64,21 @@ def make_program(*, user_id: int, **overrides) -> Program:
     }
     data.update(overrides)
     return Program(**data)
+
+
+def make_program_template(**overrides) -> ProgramTemplate:
+    n = next(_seq)
+    data = {
+        "slug": f"template-{n}",
+        "name": f"Template {n}",
+        "description": None,
+        "weight_unit": WeightUnit.KG,
+        "default_progression_type": ProgressionType.FIXED_INCREMENT,
+        "default_progression_params": {"increment": 2.5},
+        "structure": {"weeks": []},
+    }
+    data.update(overrides)
+    return ProgramTemplate(**data)
 
 
 def make_training_week(*, program_id: int, **overrides) -> TrainingWeek:

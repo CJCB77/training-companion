@@ -9,6 +9,7 @@ from app.api.exercises import router as exercises_router
 from app.api.health import router as health_router
 from app.api.history import router as history_router
 from app.api.profile import router as profile_router
+from app.api.program_templates import router as program_templates_router
 from app.api.programs import router as programs_router
 from app.api.progression import router as progression_router
 from app.api.progression_lines import router as progression_lines_router
@@ -44,6 +45,7 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(profile_router)
 app.include_router(programs_router)
+app.include_router(program_templates_router)
 app.include_router(exercises_router)
 app.include_router(training_weeks_router)
 app.include_router(workout_sessions_router)
