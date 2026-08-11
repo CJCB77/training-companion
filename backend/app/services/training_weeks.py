@@ -8,9 +8,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from app.models.training_week import TrainingWeek
+from app.repositories import exercise_prescriptions as exercise_prescriptions_repo
 from app.repositories import training_weeks as training_weeks_repo
-from app.schemas.training_weeks import TrainingWeekCreate, TrainingWeekUpdate
+from app.repositories import workout_sessions as workout_sessions_repo
+from app.schemas.training_weeks import (
+    TrainingWeekCreate,
+    TrainingWeekGenerateRequest,
+    TrainingWeekUpdate,
+)
 from app.services import programs as programs_service
+from app.services import progression as progression_service
+
+# Recommendation actions with no confident number to suggest — for these, the new
+# prescription's target_weight falls back to a verbatim copy of the source's
+# target_weight rather than the engine's (non-actionable) recommended_weight.
+_NO_CONFIDENT_RECOMMENDATION_ACTIONS = {"manual", "no_data", "needs_configuration"}
 
 
 class TrainingWeekNotFoundError(Exception):
@@ -156,3 +168,95 @@ def update_training_week(
 def delete_training_week(session: Session, *, user_id: int, week_id: int) -> None:
     week = get_owned_training_week(session, user_id=user_id, week_id=week_id)
     training_weeks_repo.delete_training_week(session, week)
+
+
+def _resolve_target_weight(
+    *,
+    source_target_weight: float | None,
+    recommendation: progression_service.RecommendationResult,
+) -> float | None:
+    """Per the TRAIN-26 addendum, plus one defensive guard: use the engine's
+    `recommended_weight` unless the action carries no confident number
+    (`manual`/`no_data`/`needs_configuration`) or `recommended_weight` is itself
+    `None` — `action="hold"` returns `current_weight`, which is legitimately `None`
+    for bodyweight work, and without this guard that would blank out a prescribed
+    weight instead of falling back to the source's.
+    """
+    if (
+        recommendation.action in _NO_CONFIDENT_RECOMMENDATION_ACTIONS
+        or recommendation.recommended_weight is None
+    ):
+        return source_target_weight
+    return recommendation.recommended_weight
+
+
+def generate_next_training_week(
+    session: Session,
+    *,
+    user_id: int,
+    week_id: int,
+    payload: TrainingWeekGenerateRequest,
+) -> TrainingWeek:
+    """Copy `week_id`'s WorkoutSession/ExercisePrescription structure into a new,
+    appended week of the same program — each prescription's `progression_line_id`
+    carried forward unchanged, each `target_weight` pre-filled from the progression
+    engine rather than copied. No `ExercisePerformance` rows are ever copied.
+
+    Read phase (ownership, source tree, recommendations) happens entirely before the
+    single write transaction delegated to `training_weeks_repo.create_week_from_source`
+    — the recommendation computation is read-only, so it's safe to run upfront.
+    """
+    source_week = get_owned_training_week(session, user_id=user_id, week_id=week_id)
+    program = programs_service.get_owned_program(
+        session, user_id=user_id, program_id=source_week.program_id
+    )
+
+    source_sessions = workout_sessions_repo.list_workout_sessions_for_week(
+        session, source_week.id
+    )
+    source_session_ids = [workout_session.id for workout_session in source_sessions]
+    source_prescriptions = (
+        exercise_prescriptions_repo.list_exercise_prescriptions_for_sessions(
+            session, source_session_ids
+        )
+    )
+
+    recommendations = progression_service.get_recommendations_for_prescriptions(
+        session, program=program, prescriptions=source_prescriptions
+    )
+    target_weight_by_prescription_id = {
+        prescription.id: _resolve_target_weight(
+            source_target_weight=prescription.target_weight,
+            recommendation=recommendations[prescription.id],
+        )
+        for prescription in source_prescriptions
+    }
+
+    max_week_number = training_weeks_repo.get_max_week_number(session, program.id)
+    week_number = 1 if max_week_number is None else max_week_number + 1
+
+    try:
+        return training_weeks_repo.create_week_from_source(
+            session,
+            program_id=program.id,
+            week_number=week_number,
+            name=payload.name,
+            source_sessions=source_sessions,
+            source_prescriptions=source_prescriptions,
+            target_weight_by_prescription_id=target_weight_by_prescription_id,
+        )
+    except IntegrityError as exc:
+        # The uq_training_week_program_number race — a double-tap. No retry (see
+        # design plan): silently retrying would create a second near-identical
+        # week, so this surfaces as a 409 instead.
+        #
+        # Unlike update_training_week, this attributes *any* IntegrityError here to
+        # the week_number constraint without checking which column it names. That's
+        # deliberate, not an oversight: every row create_week_from_source writes is
+        # built from an already-valid source tree (FK values copied verbatim from
+        # rows that satisfied the same constraints when the source week was
+        # created), so week_number is the only constraint this call can plausibly
+        # violate — same reasoning create_training_week_for_program's retry loop
+        # already relies on above.
+        session.rollback()
+        raise DuplicateWeekNumberError(week_number) from exc
