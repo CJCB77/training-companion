@@ -236,9 +236,10 @@ def test_create_week_from_source_uses_resolved_target_weights_and_keeps_line_ids
     db_session,
 ):
     program, source_sessions, source_prescriptions = _build_source_tree(db_session)
+    monday_source, wednesday_source = source_prescriptions
     target_weights = {
-        source_prescriptions[0].id: 102.5,
-        source_prescriptions[1].id: 62.5,
+        monday_source.id: 102.5,
+        wednesday_source.id: 62.5,
     }
 
     new_week = training_weeks_repo.create_week_from_source(
@@ -251,28 +252,37 @@ def test_create_week_from_source_uses_resolved_target_weights_and_keeps_line_ids
         target_weight_by_prescription_id=target_weights,
     )
 
-    new_sessions = db_session.exec(
-        select(WorkoutSession)
-        .where(WorkoutSession.week_id == new_week.id)
-        .order_by(WorkoutSession.order_index)
-    ).all()
-    new_prescriptions = db_session.exec(
-        select(ExercisePrescription)
-        .where(
-            ExercisePrescription.workout_session_id.in_([s.id for s in new_sessions])
-        )
-        .order_by(ExercisePrescription.id)
-    ).all()
+    new_sessions_by_day_name = {
+        session.day_name: session
+        for session in db_session.exec(
+            select(WorkoutSession).where(WorkoutSession.week_id == new_week.id)
+        ).all()
+    }
 
-    assert {p.target_weight for p in new_prescriptions} == set(target_weights.values())
-    assert all(
-        p.progression_line_id == source_prescriptions[0].progression_line_id
-        for p in new_prescriptions
-    )
-    monday_new_prescription = next(
-        p for p in new_prescriptions if p.notes == "pause squats"
-    )
-    assert monday_new_prescription.target_weight == 102.5
+    def _prescriptions_for(day_name: str) -> list[ExercisePrescription]:
+        return list(
+            db_session.exec(
+                select(ExercisePrescription).where(
+                    ExercisePrescription.workout_session_id
+                    == new_sessions_by_day_name[day_name].id
+                )
+            ).all()
+        )
+
+    # Directly pins the session-id map (`zip(source_sessions, new_sessions)`) rather
+    # than inferring pairing from `notes`/target-weight alone — a bug that collapsed
+    # every new prescription onto `new_sessions[0]` would still pass a check that
+    # only compared the flattened sets across both sessions.
+    [monday_new] = _prescriptions_for("Monday")
+    [wednesday_new] = _prescriptions_for("Wednesday")
+
+    assert monday_new.notes == "pause squats"
+    assert monday_new.target_weight == 102.5
+    assert monday_new.progression_line_id == monday_source.progression_line_id
+
+    assert wednesday_new.notes is None
+    assert wednesday_new.target_weight == 62.5
+    assert wednesday_new.progression_line_id == wednesday_source.progression_line_id
 
 
 def test_create_week_from_source_never_copies_performances(db_session):

@@ -391,6 +391,82 @@ def test_two_prescriptions_on_same_line_in_one_week_get_the_same_recommendation(
     assert {p.target_weight for p in new_prescriptions} == {STARTING_WEIGHT + INCREMENT}
 
 
+def test_generate_next_week_preserves_session_to_prescription_pairing(db_session):
+    # Directly pins the session-id map (`zip(source_sessions, new_sessions)` inside
+    # `create_week_from_source`) by day_name, rather than only checking the
+    # flattened set of prescriptions across the whole new week — a bug that
+    # collapsed every new prescription onto the first new session would still
+    # pass a check that only compared flattened sets.
+    user_id, program, exercise = _build_program(db_session)
+    monday_line = make_progression_line(program_id=program.id, exercise_id=exercise.id)
+    wednesday_line = make_progression_line(
+        program_id=program.id, exercise_id=exercise.id, is_default=False, label="Light"
+    )
+    _persist(db_session, monday_line, wednesday_line)
+    source_week = make_training_week(program_id=program.id, week_number=1)
+    _persist(db_session, source_week)
+    monday = make_workout_session(
+        week_id=source_week.id, day_name="Monday", order_index=0
+    )
+    wednesday = make_workout_session(
+        week_id=source_week.id, day_name="Wednesday", order_index=1
+    )
+    _persist(db_session, monday, wednesday)
+    monday_prescription = make_exercise_prescription(
+        workout_session_id=monday.id,
+        exercise_id=exercise.id,
+        progression_line_id=monday_line.id,
+        target_sets=TARGET_SETS,
+        target_reps=TARGET_REPS,
+        target_weight=STARTING_WEIGHT,
+        notes="heavy day",
+    )
+    wednesday_prescription = make_exercise_prescription(
+        workout_session_id=wednesday.id,
+        exercise_id=exercise.id,
+        progression_line_id=wednesday_line.id,
+        target_sets=TARGET_SETS,
+        target_reps=TARGET_REPS,
+        target_weight=STARTING_WEIGHT / 2,
+        notes="light day",
+    )
+    _persist(db_session, monday_prescription, wednesday_prescription)
+
+    generated = training_weeks_service.generate_next_training_week(
+        db_session,
+        user_id=user_id,
+        week_id=source_week.id,
+        payload=TrainingWeekGenerateRequest(),
+    )
+
+    new_sessions_by_day_name = {
+        session.day_name: session
+        for session in db_session.exec(
+            select(WorkoutSession).where(WorkoutSession.week_id == generated.id)
+        ).all()
+    }
+
+    def _prescription_for(day_name: str) -> ExercisePrescription:
+        [prescription] = db_session.exec(
+            select(ExercisePrescription).where(
+                ExercisePrescription.workout_session_id
+                == new_sessions_by_day_name[day_name].id
+            )
+        ).all()
+        return prescription
+
+    monday_new = _prescription_for("Monday")
+    wednesday_new = _prescription_for("Wednesday")
+
+    assert monday_new.notes == "heavy day"
+    assert monday_new.target_weight == STARTING_WEIGHT
+    assert monday_new.progression_line_id == monday_line.id
+
+    assert wednesday_new.notes == "light day"
+    assert wednesday_new.target_weight == STARTING_WEIGHT / 2
+    assert wednesday_new.progression_line_id == wednesday_line.id
+
+
 def test_no_new_progression_lines_are_created(db_session):
     user_id, program, exercise = _build_program(db_session)
     line = make_progression_line(program_id=program.id, exercise_id=exercise.id)
